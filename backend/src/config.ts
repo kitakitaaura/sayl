@@ -82,6 +82,16 @@ const schema = z.object({
   SEED_MAX_MINUTES: positiveInt.default(60),
   DEFAULT_RATIO_LIMIT: z.coerce.number().positive().default(1),
   MAX_TORRENT_FILE_KB: positiveInt.default(4096),
+  /** Per-IP limits. People behind one shared address (offices, mobile carriers) count together. */
+  MAX_ACTIVE_PER_IP: positiveInt.default(3),
+  MAX_STORAGE_PER_IP_GB: z.coerce.number().positive().default(20),
+  /** Free disk space always left untouched, on top of the global cap. */
+  DISK_RESERVE_GB: z.coerce.number().min(0).default(2),
+
+  RATE_LIMIT_PER_MINUTE: positiveInt.default(120),
+  ADDS_PER_HOUR: positiveInt.default(30),
+  SESSIONS_PER_HOUR: positiveInt.default(10),
+  MAX_EVENT_STREAMS: positiveInt.default(4),
 });
 
 export type Env = z.infer<typeof schema>;

@@ -18,7 +18,7 @@ let api: FastifyInstance | undefined;
 const engine = new Engine(qbit, db, cfg, Date.now, (err) =>
   api?.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'engine poll failed'),
 );
-api = buildApi(cfg, state, { engine });
+api = buildApi(cfg, state, { engine, db });
 const dl = buildDl(cfg, engine);
 const log = api.log;
 

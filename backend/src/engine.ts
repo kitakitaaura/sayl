@@ -9,9 +9,10 @@
  * Every operation runs one at a time, so polls and user actions never interleave.
  */
 import { EventEmitter } from 'node:events';
+import { statfs } from 'node:fs/promises';
 import type { Config } from './config.js';
 import type { Db, Ownership } from './db.js';
-import { badRequest, conflict, notFound, tooLarge } from './errors.js';
+import { ApiError, badRequest, conflict, notFound, tooLarge } from './errors.js';
 import { tagList, type AddSource, type QbitClient, type QbitFile, type QbitTorrent } from './qbit.js';
 import { isInfoHash } from './torrent-input.js';
 
@@ -65,6 +66,9 @@ export interface SelectOptions {
   ratioLimit?: number;
 }
 
+/** How long a torrent may exist in qBittorrent without a database row (or the reverse) before cleanup removes it. */
+const ORPHAN_GRACE_SECONDS = 600;
+
 /** qBittorrent tag marking a torrent as owned by a session. */
 export const ownerTag = (owner: string) => `owner-${owner}`;
 
@@ -97,6 +101,15 @@ export class Engine extends EventEmitter {
     private readonly cfg: Config,
     private readonly now: () => number = Date.now,
     private readonly onError: (err: unknown) => void = () => {},
+    /** Free bytes on the downloads disk, or null if unknown. */
+    private readonly diskFree: () => Promise<number | null> = async () => {
+      try {
+        const s = await statfs(cfg.DOWNLOADS_DIR);
+        return s.bavail * s.bsize;
+      } catch {
+        return null;
+      }
+    },
   ) {
     super();
     this.setMaxListeners(0);
@@ -132,6 +145,7 @@ export class Engine extends EventEmitter {
     return this.exclusive(async () => {
       await this.refresh();
       for (const hash of this.db.torrentHashes()) await this.reconcile(hash);
+      await this.cleanup();
       this.emit('update');
     });
   }
@@ -215,6 +229,57 @@ export class Engine extends EventEmitter {
       await this.q.stop([hash]);
       await this.refresh([hash]);
     }
+  }
+
+  /** Hours finished files are kept for a selection of this size. */
+  keepHours(bytes: number): number {
+    const tiers = this.cfg.RETENTION_TIERS;
+    return (tiers.find((t) => bytes <= t.maxBytes) ?? tiers[tiers.length - 1]!).hours;
+  }
+
+  /**
+   * Deletes what has outlived its welcome:
+   * - an owner's finished files once their retention time is up,
+   * - unfinished torrents with no progress for STALL_TIMEOUT_HOURS (paused,
+   *   stuck on metadata or never started all count),
+   * - torrents in qBittorrent that Sayl doesn't know about, and database rows
+   *   for torrents qBittorrent no longer has.
+   */
+  private async cleanup(): Promise<void> {
+    const now = this.now();
+    const stallMs = this.cfg.STALL_TIMEOUT_HOURS * 3600_000;
+    for (const o of this.db.allOwnerships()) {
+      if (o.completedAt !== null) {
+        if (now >= o.completedAt + this.keepHours(o.selectedSize) * 3600_000) await this.release(o.owner, o.hash);
+        continue;
+      }
+      const files = this.files.get(o.hash);
+      const done = o.selected && files ? Math.floor(selectionProgress(o.selected, files).done) : 0;
+      if (done > o.progressBytes) this.db.setProgress(o.hash, o.owner, done, now);
+      else if (now - o.progressAt >= stallMs) await this.release(o.owner, o.hash);
+    }
+    for (const [hash, t] of [...this.torrents]) {
+      if (this.db.torrentAddedAt(hash) === null && Math.floor(now / 1000) - t.added_on > ORPHAN_GRACE_SECONDS) {
+        await this.q.delete([hash], true);
+        this.torrents.delete(hash);
+        this.files.delete(hash);
+      }
+    }
+    for (const hash of this.db.torrentHashes()) {
+      const at = this.db.torrentAddedAt(hash);
+      if (!this.torrents.has(hash) && at !== null && now - at > ORPHAN_GRACE_SECONDS * 1000) this.db.deleteTorrent(hash);
+    }
+  }
+
+  /** Bytes reserved on disk: every file someone picked, counted once per torrent. */
+  private reservedBytes(): number {
+    let total = 0;
+    for (const [hash, t] of this.torrents) {
+      // the file cache holds priorities as Sayl last set them; qBittorrent's own total can lag a poll behind
+      const files = this.files.get(hash);
+      total += files ? files.reduce((sum, f) => sum + (f.priority > 0 ? f.size : 0), 0) : Math.max(0, t.size);
+    }
+    return total;
   }
 
   // ---- views -----------------------------------------------------------------
@@ -326,6 +391,14 @@ export class Engine extends EventEmitter {
       const hash = input.infoHash;
       const mine = this.db.ownership(hash, owner);
       if (mine) return this.view(mine);
+      if (this.db.isBlocked(hash)) throw new ApiError(451, 'blocked', "this torrent was removed after a complaint and can't be added");
+      const active = (list: Ownership[]) => list.filter((o) => o.completedAt === null).length;
+      if (active(this.db.ownershipsOf(owner)) >= this.cfg.MAX_ACTIVE_PER_USER) {
+        throw conflict(`you can have ${this.cfg.MAX_ACTIVE_PER_USER} unfinished torrents at once. wait for one to finish or remove one.`, 'too_many_active');
+      }
+      if (active(this.db.ownershipsByIp(ip)) >= this.cfg.MAX_ACTIVE_PER_IP) {
+        throw conflict(`your network already has ${this.cfg.MAX_ACTIVE_PER_IP} unfinished torrents. wait for one to finish.`, 'too_many_active_ip');
+      }
       const tag = ownerTag(owner);
       let known = this.torrents.has(hash) || (await this.q.torrents([hash])).length > 0;
       if (!known) known = !(await this.q.add(input.source, [tag]));
@@ -361,6 +434,26 @@ export class Engine extends EventEmitter {
       }
       const ratioLimit = opts.ratioLimit ?? this.cfg.DEFAULT_RATIO_LIMIT;
       if (!(ratioLimit >= 0.1 && ratioLimit <= 10)) throw badRequest('ratio limit must be between 0.1 and 10', 'bad_ratio');
+
+      const stored = (list: Ownership[]) => list.reduce((sum, x) => sum + (x.selected ? x.selectedSize : 0), 0);
+      const userCap = this.cfg.MAX_STORAGE_PER_USER_GB * 1e9;
+      if (stored(this.db.ownershipsOf(owner)) + size > userCap) {
+        throw conflict(`that would take you past ${this.cfg.MAX_STORAGE_PER_USER_GB} gb stored. remove something or pick fewer files.`, 'storage_full');
+      }
+      if (stored(this.db.ownershipsByIp(o.ip)) + size > this.cfg.MAX_STORAGE_PER_IP_GB * 1e9) {
+        throw conflict(`your network is using its ${this.cfg.MAX_STORAGE_PER_IP_GB} gb. remove something or pick fewer files.`, 'storage_full_ip');
+      }
+      // only files nobody picked yet need new space
+      const fresh = picked.map((i) => files[i]!).filter((f) => f.priority === 0);
+      const extra = fresh.reduce((sum, f) => sum + f.size, 0);
+      if (this.reservedBytes() + extra > this.cfg.GLOBAL_STORAGE_CAP_GB * 1e9) {
+        throw conflict("the server is full right now. try again in a few hours, when older files expire.", 'server_full');
+      }
+      const free = await this.diskFree();
+      const needed = fresh.reduce((sum, f) => sum + f.size * (1 - f.progress), 0);
+      if (free !== null && needed + this.cfg.DISK_RESERVE_GB * 1e9 > free) {
+        throw conflict("the server is full right now. try again in a few hours, when older files expire.", 'server_full');
+      }
       this.db.select(hash, owner, {
         files: picked,
         size,

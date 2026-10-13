@@ -1,9 +1,10 @@
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
+  import Gate from '$lib/components/Gate.svelte';
   import Omnibox from '$lib/components/Omnibox.svelte';
   import TorrentCard from '$lib/components/TorrentCard.svelte';
   import Wordmark from '$lib/components/Wordmark.svelte';
-  import { APP_NAME } from '$lib/config';
+  import { ABUSE_EMAIL, APP_NAME } from '$lib/config';
   import { app } from '$lib/state/app.svelte';
   import { settings } from '$lib/state/settings.svelte';
 
@@ -35,6 +36,11 @@
   <div class="col">
     <h1 class="sr">{APP_NAME}</h1>
     <Wordmark />
+    {#if app.status === 'gate'}
+      <Gate />
+    {:else if app.status === 'banned'}
+      <p class="status" role="alert">access from your network has been blocked. if you think this is a mistake, contact <span class="mono">{ABUSE_EMAIL}</span>.</p>
+    {:else}
     <Omnibox />
     <div class="chips" role="group" aria-label="options">
       {#each chips as c (c.key)}
@@ -59,6 +65,7 @@
           <TorrentCard {t} />
         {/each}
       </section>
+    {/if}
     {/if}
   </div>
 </div>
@@ -128,6 +135,9 @@
     text-align: center;
     font-size: 12.5px;
     color: var(--warn);
+  }
+  .mono {
+    color: var(--fg);
   }
   .list {
     display: flex;

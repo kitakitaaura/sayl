@@ -2,7 +2,7 @@
 
 **Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents on a server and hands you the files over HTTPS. Paste a magnet link or drop a `.torrent`, pick files, download them in the browser.
 
-> Status: **stage 3 of 5**. The Docker stack, the backend API and the web UI work. Quotas, cleanup, rate limits, the access code and captcha (stage 4) and the full deploy guide (stage 5) are next.
+> Status: **stage 4 of 5**. Everything works: the Docker stack, the API, the web UI, quotas, cleanup, rate limits, the access code, the captcha and the admin commands. The step-by-step deploy guide and a real-swarm smoke test (stage 5) are next.
 
 ## How it fits together
 
@@ -118,13 +118,48 @@ All routes are under `https://sayl-api.kitaaura.com`. The browser sends the sess
 
 **Downloads** come from `https://sayl-dl.kitaaura.com/dl/<token>/<name>`. Links check ownership again on every request, support byte ranges (resumable downloads), and the zip streams with a known size, so browsers show progress.
 
+## Limits and cleanup
+
+All of these are in `.env`.
+
+| What | Default |
+|---|---|
+| Unfinished torrents | 3 per session, 3 per IP |
+| Stored data | 20 GB per session, 20 GB per IP |
+| One torrent's picked files | 20 GB |
+| Whole server | 120 GB reserved, and `DISK_RESERVE_GB` (2 GB) always left free on disk |
+| Finished files kept | 24 h up to 3 GB, 12 h up to 5 GB, 6 h up to 10 GB, 3 h up to 20 GB |
+| Seeding | stops after 60 minutes or at the ratio limit |
+| No progress | unfinished torrents with no progress for 6 h are deleted (paused, stuck on metadata, or files never picked) |
+| Requests | 120 per minute per IP; 30 adds per hour per session and per IP; 10 new sessions per hour per IP; 4 open tabs per session |
+
+Space is counted when files are picked, not as they download, so many half-finished torrents can't overfill the disk. A torrent shared by several people is stored once and counted against each of them. Anything in qBittorrent that Sayl has no record of (and the reverse) is cleaned up after 10 minutes.
+
+**Access:** set `ACCESS_CODE` to require a code before anyone gets a session (the beta), and `TURNSTILE_SECRET_KEY` plus the Pages variable `TURNSTILE_SITE_KEY` for the Cloudflare Turnstile captcha. Leave either empty to turn it off. Both are checked once, when a session starts.
+
+## Admin
+
+There is no admin website or endpoint. On the VPS:
+
+```sh
+docker compose exec backend sayl-admin status                      # engine version and protocol settings
+docker compose exec backend sayl-admin list --ips                  # every torrent, its owners and their IPs
+docker compose exec backend sayl-admin block <hash|magnet> [reason] # delete for everyone, refuse it from now on
+docker compose exec backend sayl-admin unblock <hash|magnet>
+docker compose exec backend sayl-admin ban-ip <ip> [reason] [--purge]   # --purge also deletes its torrents
+docker compose exec backend sayl-admin unban-ip <ip>
+docker compose exec backend sayl-admin blocklist
+```
+
+For a takedown notice: find the torrent (`list`), then `block` it. For repeat abuse from one address, `ban-ip --purge`.
+
 ## Tests
 
 ```sh
 cd backend && npm install && npm test
 ```
 
-The tests run against an in-memory stand-in for qBittorrent's API. They cover sessions, cross-site protection, isolation between users (every route, shared torrents, tag mismatches), file selection, seeding limits, `.torrent` validation, private-address blocking for pasted URLs, signed links, byte ranges, zips and path traversal.
+The tests run against an in-memory stand-in for qBittorrent's API. They cover sessions, cross-site protection, isolation between users (every route, shared torrents, tag mismatches), file selection, seeding limits, `.torrent` validation, private-address blocking for pasted URLs, signed links, byte ranges, zips, path traversal, quotas (per session, per IP, server-wide, disk), retention and stall cleanup, orphans, the blocklist, IP bans, the access code, the captcha and rate limits.
 
 ## License
 

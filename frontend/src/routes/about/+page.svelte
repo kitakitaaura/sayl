@@ -30,6 +30,10 @@
       there are no accounts. your browser gets an anonymous session cookie, and your torrents are tied to it. settings like the theme stay in your
       browser. clearing your cookies or resetting your session means you can't reach your old torrents anymore.
     </p>
+    <p>
+      while a torrent is on the server, {name} keeps the ip address that added it, to enforce limits and handle abuse reports. it's deleted along
+      with the torrent.
+    </p>
 
     <h2>abuse</h2>
     <p>report content to <span class="mono">{ABUSE_EMAIL}</span>. we remove it and block it from being added again.</p>

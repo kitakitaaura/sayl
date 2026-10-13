@@ -48,6 +48,8 @@ export interface Limits {
 export interface SessionInfo {
   app: string;
   session: { active: true } | null;
+  /** what a new session needs */
+  access: { code: boolean; captcha: boolean };
   limits: Limits;
 }
 
@@ -98,7 +100,8 @@ export type Action = 'pause' | 'resume' | 'recheck' | 'stop-seeding';
 
 export const api = {
   session: () => request<SessionInfo>('GET', '/api/session'),
-  startSession: () => request<{ session: { active: true } }>('POST', '/api/session'),
+  startSession: (body?: { accessCode?: string; captchaToken?: string }) =>
+    request<{ session: { active: true } }>('POST', '/api/session', body),
   endSession: () => request<void>('DELETE', '/api/session'),
   torrents: () => request<{ torrents: TorrentView[] }>('GET', '/api/torrents'),
   add: (source: string) => request<{ torrent: TorrentView }>('POST', '/api/torrents', { source }),

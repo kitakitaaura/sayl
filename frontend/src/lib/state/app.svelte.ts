@@ -15,8 +15,9 @@ export const errorMessage = (err: unknown) =>
   err instanceof ApiError ? err.message : 'something went wrong. try again.';
 
 class App {
-  /** 'loading' until the session and first list arrive */
-  status = $state<'loading' | 'ready' | 'offline'>('loading');
+  /** 'loading' until the session and first list arrive; 'gate' while an access code or captcha is needed */
+  status = $state<'loading' | 'gate' | 'ready' | 'offline' | 'banned'>('loading');
+  access = $state<{ code: boolean; captcha: boolean }>({ code: false, captcha: false });
   limits = $state<Limits | null>(null);
   torrents = $state<TorrentView[]>([]);
   /** torrents hidden by auto-clear */
@@ -54,13 +55,40 @@ class App {
     try {
       const s = await api.session();
       this.limits = s.limits;
-      if (!s.session) await api.startSession();
-      this.torrents = (await api.torrents()).torrents;
-      this.status = 'ready';
-      this.listen();
-    } catch {
+      this.access = s.access;
+      if (!s.session) {
+        if (s.access.code || s.access.captcha) {
+          this.status = 'gate';
+          return;
+        }
+        await api.startSession();
+      }
+      await this.load();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'banned') {
+        this.status = 'banned';
+        return;
+      }
       this.status = 'offline';
       setTimeout(() => void this.connect(), 5000);
+    }
+  }
+
+  private async load(): Promise<void> {
+    this.torrents = (await api.torrents()).torrents;
+    this.status = 'ready';
+    this.listen();
+  }
+
+  /** Starts a session from the gate. Returns an error message, or null on success. */
+  async enter(accessCode: string, captchaToken: string): Promise<string | null> {
+    try {
+      await api.startSession({ accessCode: accessCode || undefined, captchaToken: captchaToken || undefined });
+      await this.load();
+      toasts.push("you're in", 'ok');
+      return null;
+    } catch (err) {
+      return errorMessage(err);
     }
   }
 
@@ -217,7 +245,7 @@ class App {
       this.pending.clear();
       this.setHidden([]);
       await this.connect();
-      toasts.push('started a new session', 'ok');
+      toasts.push(this.status === 'gate' ? 'session ended' : 'started a new session', 'ok');
     } catch (err) {
       toasts.push(errorMessage(err), 'err');
     }

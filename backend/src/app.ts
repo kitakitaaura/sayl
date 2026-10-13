@@ -1,12 +1,15 @@
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { accessRequirements, codeMatches, turnstileVerifier, type CaptchaVerifier } from './access.js';
 import type { Config } from './config.js';
+import type { Db } from './db.js';
 import { makeLinks, registerDownloadRoutes } from './downloads.js';
 import type { Engine, NewTorrent } from './engine.js';
 import { ApiError, badRequest, forbidden } from './errors.js';
+import { ConnectionCounter, RateLimiter } from './limits.js';
 import { QbitError } from './qbit.js';
 import { fetchTorrentUrl } from './remote-torrent.js';
 import { endSession, readSession, requireOwner, startSession } from './session.js';
@@ -20,6 +23,9 @@ export interface EngineState {
 
 export interface ApiDeps {
   engine: Engine;
+  db: Db;
+  /** Checks a Turnstile token. Defaults to Cloudflare's siteverify; swappable for tests. */
+  verifyCaptcha?: CaptchaVerifier;
   now?: () => number;
   /** Downloads a .torrent from a pasted url. Swappable for tests. */
   fetchTorrent?: (url: string) => Promise<Buffer>;
@@ -60,6 +66,7 @@ export function limits(cfg: Config) {
 }
 
 const hashParam = z.object({ hash: z.string() });
+const sessionBody = z.object({ accessCode: z.string().max(200).optional(), captchaToken: z.string().max(2048).optional() }).optional();
 const addBody = z.object({ source: z.string().trim().min(1).max(8192) });
 const selectBody = z.object({
   files: z.array(z.number().int().min(0)).min(1).max(100_000),
@@ -80,10 +87,22 @@ export const clientIp = (req: FastifyRequest) => {
   return (typeof h === 'string' && h) || req.ip;
 };
 
+/** Answers 429 with a Retry-After header. */
+function limited(reply: FastifyReply, seconds: number, message: string): never {
+  reply.header('retry-after', String(seconds));
+  throw new ApiError(429, 'rate_limited', message);
+}
+
 /** Public API, reached through the Cloudflare Tunnel. */
 export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): FastifyInstance {
-  const { engine } = deps;
+  const { engine, db } = deps;
   const now = deps.now ?? Date.now;
+  const verifyCaptcha = deps.verifyCaptcha ?? turnstileVerifier(cfg);
+  const perMinute = new RateLimiter(cfg.RATE_LIMIT_PER_MINUTE, 60_000, now);
+  const sessionsPerIp = new RateLimiter(cfg.SESSIONS_PER_HOUR, 3600_000, now);
+  const addsPerOwner = new RateLimiter(cfg.ADDS_PER_HOUR, 3600_000, now);
+  const addsPerIp = new RateLimiter(cfg.ADDS_PER_HOUR, 3600_000, now);
+  const streams = new ConnectionCounter(cfg.MAX_EVENT_STREAMS);
   const fetchTorrent = deps.fetchTorrent ?? ((url: string) => fetchTorrentUrl(url, { maxBytes: cfg.MAX_TORRENT_FILE_KB * 1024 }));
   const app = Fastify({ logger: logger(cfg), bodyLimit: 64 * 1024 });
 
@@ -101,6 +120,22 @@ export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): Fastif
     if (origin && origin !== cfg.FRONTEND_ORIGIN) throw forbidden('requests from other sites are not allowed', 'bad_origin');
   });
 
+  // banned networks and the general per-IP rate limit
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/') || req.url === '/api/health' || req.method === 'OPTIONS') return;
+    const ip = clientIp(req);
+    if (db.isBanned(ip)) throw forbidden('access from your network has been blocked', 'banned');
+    const wait = perMinute.hit(ip);
+    if (wait) limited(reply, wait, 'too many requests. slow down and try again in a moment.');
+  });
+
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+    if (!reply.hasHeader('cache-control')) reply.header('cache-control', 'no-store');
+  });
+
   app.get('/api/health', async (_req, reply) => {
     if (!state.ready) return reply.code(503).send({ app: cfg.APP_NAME, status: 'starting' });
     return { app: cfg.APP_NAME, status: 'ok' };
@@ -111,11 +146,29 @@ export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): Fastif
   app.get('/api/session', async (req) => ({
     app: cfg.APP_NAME,
     session: readSession(req) ? { active: true } : null,
+    access: accessRequirements(cfg),
     limits: limits(cfg),
   }));
 
   app.post('/api/session', async (req, reply) => {
     if (readSession(req)) return { session: { active: true } };
+    const ip = clientIp(req);
+    const wait = sessionsPerIp.hit(ip);
+    if (wait) limited(reply, wait, 'too many new sessions from your network. try again later.');
+    const body = parse(sessionBody, req.body ?? undefined) ?? {};
+    if (cfg.ACCESS_CODE && !codeMatches(cfg.ACCESS_CODE, (body.accessCode ?? '').trim())) {
+      throw forbidden("that access code isn't right", 'bad_access_code');
+    }
+    if (cfg.TURNSTILE_SECRET_KEY) {
+      let ok: boolean;
+      try {
+        ok = await verifyCaptcha(body.captchaToken ?? '', ip);
+      } catch (err) {
+        req.log.error({ err: err instanceof Error ? err.message : String(err) }, 'turnstile check failed');
+        throw new ApiError(503, 'captcha_unavailable', "the captcha check isn't working right now. try again in a minute.");
+      }
+      if (!ok) throw forbidden("the captcha check didn't pass. try again.", 'captcha_failed');
+    }
     startSession(reply, cfg);
     return reply.code(201).send({ session: { active: true } });
   });
@@ -131,6 +184,8 @@ export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): Fastif
 
   app.post('/api/torrents', async (req, reply) => {
     const owner = requireOwner(req);
+    const wait = Math.max(addsPerOwner.hit(owner), addsPerIp.hit(clientIp(req)));
+    if (wait) limited(reply, wait, `you can add ${cfg.ADDS_PER_HOUR} torrents an hour. try again later.`);
     let input: NewTorrent;
     if (req.isMultipart()) {
       const file = await req.file();
@@ -212,11 +267,14 @@ export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): Fastif
 
   app.get('/api/events', async (req, reply) => {
     const owner = requireOwner(req);
+    const release = streams.take(owner);
+    if (!release) limited(reply, 10, 'too many open tabs. close one and reload.');
     reply.raw.writeHead(200, {
       ...(reply.getHeaders() as Record<string, string>),
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
       'x-accel-buffering': 'no',
+      'x-content-type-options': 'nosniff',
     });
     reply.hijack();
     let last = '';
@@ -240,6 +298,7 @@ export function buildApi(cfg: Config, state: EngineState, deps: ApiDeps): Fastif
     req.raw.on('close', () => {
       engine.off('update', onUpdate);
       clearInterval(ping);
+      release();
     });
   });
 

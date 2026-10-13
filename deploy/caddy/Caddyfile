@@ -10,5 +10,8 @@
 	handle {
 		respond 404
 	}
-	header -Server
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
 }

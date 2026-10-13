@@ -8,20 +8,8 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="%sveltekit.assets%/favicon-32.png" type="image/png" sizes="32x32" />
     <link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />
-    <script>
-      // apply the saved theme before first paint (key and shape match lib/state/settings.svelte.ts)
-      (function () {
-        var root = document.documentElement;
-        try {
-          var s = JSON.parse(localStorage.getItem('sayl.settings') || '{}');
-          var t = s.theme === 'auto' || s.theme === 'light' ? s.theme : 'dark';
-          if (t !== 'auto') root.setAttribute('data-theme', t);
-          if (s.reduceMotion === true) root.classList.add('rm');
-        } catch (e) {
-          root.setAttribute('data-theme', 'dark');
-        }
-      })();
-    </script>
+    <!-- applies the saved theme before first paint; see static/theme.js -->
+    <script src="%sveltekit.assets%/theme.js"></script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

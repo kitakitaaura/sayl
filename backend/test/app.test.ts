@@ -13,7 +13,7 @@ afterEach(async () => {
 
 describe('health', () => {
   it('returns 503 until qbittorrent is verified, then 200 without engine details', async () => {
-    const starting = buildApi(h.cfg, { ready: false, error: 'waiting' }, { engine: h.engine });
+    const starting = buildApi(h.cfg, { ready: false, error: 'waiting' }, { engine: h.engine, db: h.db });
     const r1 = await starting.inject({ method: 'GET', url: '/api/health' });
     expect(r1.statusCode).toBe(503);
     expect(r1.json()).toEqual({ app: 'Sayl', status: 'starting' });

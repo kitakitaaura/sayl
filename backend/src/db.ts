@@ -23,6 +23,9 @@ export interface Ownership {
   sequential: boolean;
   startedAt: number | null;
   completedAt: number | null;
+  /** bytes of the selection downloaded at the last check, and when that last grew */
+  progressBytes: number;
+  progressAt: number;
 }
 
 interface OwnershipRow {
@@ -38,6 +41,8 @@ interface OwnershipRow {
   sequential: number;
   started_at: number | null;
   completed_at: number | null;
+  progress_bytes: number;
+  progress_at: number | null;
 }
 
 const toOwnership = (r: OwnershipRow): Ownership => ({
@@ -53,6 +58,8 @@ const toOwnership = (r: OwnershipRow): Ownership => ({
   sequential: r.sequential === 1,
   startedAt: r.started_at,
   completedAt: r.completed_at,
+  progressBytes: r.progress_bytes,
+  progressAt: r.progress_at ?? r.added_at,
 });
 
 const MIGRATIONS = [
@@ -78,6 +85,18 @@ const MIGRATIONS = [
    );
    CREATE INDEX ownerships_owner ON ownerships(owner);
    CREATE INDEX ownerships_ip ON ownerships(ip);`,
+  `ALTER TABLE ownerships ADD COLUMN progress_bytes INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE ownerships ADD COLUMN progress_at INTEGER;
+   CREATE TABLE blocked_hashes (
+     hash TEXT PRIMARY KEY,
+     reason TEXT NOT NULL DEFAULT '',
+     created_at INTEGER NOT NULL
+   );
+   CREATE TABLE banned_ips (
+     ip TEXT PRIMARY KEY,
+     reason TEXT NOT NULL DEFAULT '',
+     created_at INTEGER NOT NULL
+   );`,
 ];
 
 export class Db {
@@ -167,6 +186,63 @@ export class Db {
 
   setCompleted(hash: string, owner: string, at: number): void {
     this.sql.prepare('UPDATE ownerships SET completed_at = ? WHERE hash = ? AND owner = ? AND completed_at IS NULL').run(at, hash, owner);
+  }
+
+  allOwnerships(): Ownership[] {
+    return (this.sql.prepare('SELECT * FROM ownerships ORDER BY added_at').all() as unknown as OwnershipRow[]).map(toOwnership);
+  }
+
+  ownershipsByIp(ip: string): Ownership[] {
+    return (this.sql.prepare('SELECT * FROM ownerships WHERE ip = ?').all(ip) as unknown as OwnershipRow[]).map(toOwnership);
+  }
+
+  setProgress(hash: string, owner: string, bytes: number, at: number): void {
+    this.sql.prepare('UPDATE ownerships SET progress_bytes = ?, progress_at = ? WHERE hash = ? AND owner = ?').run(bytes, at, hash, owner);
+  }
+
+  torrentAddedAt(hash: string): number | null {
+    const r = this.sql.prepare('SELECT added_at FROM torrents WHERE hash = ?').get(hash) as { added_at: number } | undefined;
+    return r?.added_at ?? null;
+  }
+
+  // ---- blocklist and bans ----
+
+  block(hash: string, reason: string, now: number): void {
+    this.sql.prepare('INSERT INTO blocked_hashes (hash, reason, created_at) VALUES (?, ?, ?) ON CONFLICT(hash) DO UPDATE SET reason = excluded.reason').run(hash, reason, now);
+  }
+
+  unblock(hash: string): boolean {
+    return Number(this.sql.prepare('DELETE FROM blocked_hashes WHERE hash = ?').run(hash).changes) > 0;
+  }
+
+  isBlocked(hash: string): boolean {
+    return !!this.sql.prepare('SELECT 1 FROM blocked_hashes WHERE hash = ?').get(hash);
+  }
+
+  blocked(): { hash: string; reason: string; createdAt: number }[] {
+    return (this.sql.prepare('SELECT hash, reason, created_at FROM blocked_hashes ORDER BY created_at').all() as { hash: string; reason: string; created_at: number }[]).map(
+      (r) => ({ hash: r.hash, reason: r.reason, createdAt: r.created_at }),
+    );
+  }
+
+  ban(ip: string, reason: string, now: number): void {
+    this.sql.prepare('INSERT INTO banned_ips (ip, reason, created_at) VALUES (?, ?, ?) ON CONFLICT(ip) DO UPDATE SET reason = excluded.reason').run(ip, reason, now);
+  }
+
+  unban(ip: string): boolean {
+    return Number(this.sql.prepare('DELETE FROM banned_ips WHERE ip = ?').run(ip).changes) > 0;
+  }
+
+  isBanned(ip: string): boolean {
+    return !!this.sql.prepare('SELECT 1 FROM banned_ips WHERE ip = ?').get(ip);
+  }
+
+  bans(): { ip: string; reason: string; createdAt: number }[] {
+    return (this.sql.prepare('SELECT ip, reason, created_at FROM banned_ips ORDER BY created_at').all() as { ip: string; reason: string; created_at: number }[]).map((r) => ({
+      ip: r.ip,
+      reason: r.reason,
+      createdAt: r.created_at,
+    }));
   }
 
   removeOwnership(hash: string, owner: string): number {

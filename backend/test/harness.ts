@@ -19,7 +19,13 @@ export class Client {
   constructor(
     readonly app: FastifyInstance,
     readonly cookie: string,
+    /** sent as CF-Connecting-IP, like the tunnel does */
+    readonly ip = '203.0.113.' + Math.floor(Math.random() * 250 + 1),
   ) {}
+
+  private get h() {
+    return { cookie: this.cookie, 'cf-connecting-ip': this.ip };
+  }
 
   get owner(): string {
     const signed = this.cookie.slice(this.cookie.indexOf('=') + 1);
@@ -31,20 +37,20 @@ export class Client {
   }
 
   get(url: string) {
-    return this.app.inject({ method: 'GET', url, headers: { cookie: this.cookie } });
+    return this.app.inject({ method: 'GET', url, headers: this.h });
   }
 
   post(url: string, payload?: unknown) {
     return this.app.inject({
       method: 'POST',
       url,
-      headers: { cookie: this.cookie, origin: ORIGIN, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
+      headers: { ...this.h, origin: ORIGIN, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(payload === undefined ? {} : { payload: JSON.stringify(payload) }),
     });
   }
 
   del(url: string) {
-    return this.app.inject({ method: 'DELETE', url, headers: { cookie: this.cookie, origin: ORIGIN } });
+    return this.app.inject({ method: 'DELETE', url, headers: { ...this.h, origin: ORIGIN } });
   }
 
   upload(file: Buffer, filename = 'x.torrent') {
@@ -57,7 +63,7 @@ export class Client {
     return this.app.inject({
       method: 'POST',
       url: '/api/torrents',
-      headers: { cookie: this.cookie, origin: ORIGIN, 'content-type': `multipart/form-data; boundary=${boundary}` },
+      headers: { ...this.h, origin: ORIGIN, 'content-type': `multipart/form-data; boundary=${boundary}` },
       payload,
     });
   }
@@ -78,7 +84,11 @@ export interface Harness {
   clock: { now: number };
   /** urls the stubbed .torrent fetcher can serve */
   remote: Map<string, Buffer>;
-  user(): Promise<Client>;
+  /** free disk space the engine sees */
+  disk: { free: number | null };
+  /** the stubbed Turnstile check accepts the token "good-token" while pass is true */
+  captcha: { pass: boolean; calls: { token: string; ip: string }[] };
+  user(ip?: string): Promise<Client>;
   tick(): Promise<void>;
   close(): Promise<void>;
 }
@@ -92,10 +102,17 @@ export async function harness(overrides: Record<string, string> = {}): Promise<H
   const clock = { now: 1_800_000_000_000 };
   const q = new QbitClient({ baseUrl: cfg.QBIT_URL, username: cfg.QBIT_USERNAME, password: cfg.QBIT_PASSWORD });
   const db = new Db(':memory:');
-  const engine = new Engine(q, db, cfg, () => clock.now);
+  const disk = { free: 1e15 as number | null };
+  const engine = new Engine(q, db, cfg, () => clock.now, undefined, async () => disk.free);
+  const captcha = { pass: true, calls: [] as { token: string; ip: string }[] };
   const remote = new Map<string, Buffer>();
   const api = buildApi(cfg, { ready: true, error: null }, {
     engine,
+    db,
+    verifyCaptcha: async (token, ip) => {
+      captcha.calls.push({ token, ip });
+      return captcha.pass && token === 'good-token';
+    },
     now: () => clock.now,
     fetchTorrent: async (url) => {
       const b = remote.get(url);
@@ -114,11 +131,13 @@ export async function harness(overrides: Record<string, string> = {}): Promise<H
     dir,
     clock,
     remote,
-    async user() {
-      const r = await api.inject({ method: 'POST', url: '/api/session', headers: { origin: ORIGIN } });
+    disk,
+    captcha,
+    async user(ip?: string) {
+      const r = await api.inject({ method: 'POST', url: '/api/session', headers: { origin: ORIGIN, ...(ip ? { 'cf-connecting-ip': ip } : {}) } });
       const c = r.cookies.find((x) => x.name === COOKIE_NAME);
-      if (!c) throw new Error('no session cookie');
-      return new Client(api, `${c.name}=${c.value}`);
+      if (!c) throw new Error(`no session cookie: ${r.statusCode} ${r.body}`);
+      return new Client(api, `${c.name}=${c.value}`, ip);
     },
     tick: () => engine.tick(),
     async close() {
