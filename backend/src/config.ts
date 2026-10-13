@@ -54,6 +54,10 @@ const schema = z.object({
 
   FRONTEND_ORIGIN: z.url().default('http://localhost:5173'),
   DL_DOMAIN: z.string().default('localhost'),
+  /** Overrides https://DL_DOMAIN as the base of download links (e.g. http://localhost:8081 in dev). */
+  DL_PUBLIC_URL: z.url().optional(),
+  DOWNLOADS_DIR: z.string().default('/downloads'),
+  DATA_DIR: z.string().default('/data'),
 
   QBIT_URL: z.url().default('http://qbittorrent:8080'),
   QBIT_USERNAME: z.string().min(1),

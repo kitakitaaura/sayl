@@ -19,7 +19,7 @@ describe('QbitClient', () => {
   it('logs in with the per-port cookie and calls the api', async () => {
     const q = client();
     expect(await q.version()).toBe('v5.2.4');
-    expect(await q.webApiVersion()).toBe('2.11.4');
+    expect(await q.webApiVersion()).toBe('2.15.1');
     expect(fake.logins).toBe(1);
   });
 
@@ -76,6 +76,8 @@ describe('protocol settings', () => {
       dl_limit: 0,
       max_active_torrents: 20,
       torrent_content_layout: 'Subfolder',
+      ssrf_mitigation: true,
+      block_peers_on_privileged_ports: true,
     });
   });
 

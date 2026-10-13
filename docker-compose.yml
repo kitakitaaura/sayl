@@ -66,11 +66,12 @@ services:
     depends_on:
       - qbittorrent
     volumes:
-      - ./data/downloads:/downloads
-      - ./data/backend:/data
-    # Loopback only, for `curl localhost:8080/api/health` on the VPS. Public traffic arrives through cloudflared and caddy.
+      - ./data/downloads:/downloads:ro
+      - backend_data:/data
+    # Loopback only, for checks on the VPS itself. Public traffic arrives through cloudflared and caddy.
     ports:
       - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
     networks: [sayl]
     restart: unless-stopped
     logging: *logging
@@ -112,5 +113,7 @@ networks:
     enable_ipv6: ${ENABLE_IPV6:-true}
 
 volumes:
+  # the backend's SQLite database
+  backend_data:
   caddy_data:
   caddy_config:

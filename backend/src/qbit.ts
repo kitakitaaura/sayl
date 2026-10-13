@@ -47,6 +47,45 @@ export interface QbitPreferences {
   [key: string]: unknown;
 }
 
+/** One torrent from /api/v2/torrents/info (fields Sayl uses). */
+export interface QbitTorrent {
+  hash: string;
+  name: string;
+  state: string;
+  progress: number;
+  /** bytes of the files selected for download */
+  size: number;
+  /** bytes of all files, -1 before metadata */
+  total_size: number;
+  tags: string;
+  save_path: string;
+  content_path: string;
+  has_metadata: boolean;
+  ratio: number;
+  num_seeds: number;
+  num_leechs: number;
+  dlspeed: number;
+  upspeed: number;
+  eta: number;
+  seq_dl: boolean;
+  completion_on: number;
+  added_on: number;
+  amount_left: number;
+  downloaded: number;
+  uploaded: number;
+}
+
+/** One file from /api/v2/torrents/files. `name` is the path inside the save folder. */
+export interface QbitFile {
+  index: number;
+  name: string;
+  size: number;
+  progress: number;
+  priority: number;
+}
+
+export type AddSource = { magnet: string } | { file: Buffer; filename: string };
+
 export interface TransferInfo {
   connection_status: string;
   dht_nodes: number;
@@ -145,4 +184,84 @@ export class QbitClient {
   async transferInfo(): Promise<TransferInfo> {
     return (await (await this.request('/api/v2/transfer/info')).json()) as TransferInfo;
   }
+
+  /** All torrents, or only the given hashes. */
+  async torrents(hashes?: string[]): Promise<QbitTorrent[]> {
+    const q = hashes ? `?hashes=${hashes.join('|')}` : '';
+    return (await (await this.request(`/api/v2/torrents/info${q}`)).json()) as QbitTorrent[];
+  }
+
+  /** The torrent's files, or null if qBittorrent doesn't know the hash. */
+  async files(hash: string): Promise<QbitFile[] | null> {
+    try {
+      const res = await this.request(`/api/v2/torrents/files?hash=${hash}`);
+      return (await res.json()) as QbitFile[];
+    } catch (err) {
+      if (err instanceof QbitError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Adds a torrent with the given tags. Magnets start and stop by themselves
+   * once metadata arrives; .torrent files are added stopped. Both wait for the
+   * user to pick files. Returns false if qBittorrent already has the torrent.
+   */
+  async add(source: AddSource, tags: string[]): Promise<boolean> {
+    const form = new FormData();
+    if ('magnet' in source) {
+      form.append('urls', source.magnet);
+      form.append('stopCondition', 'MetadataReceived');
+    } else {
+      form.append('torrents', new Blob([new Uint8Array(source.file)]), source.filename);
+      form.append('stopped', 'true');
+    }
+    form.append('tags', tags.join(','));
+    form.append('savepath', '/downloads/');
+    form.append('contentLayout', 'Subfolder');
+    try {
+      await (await this.request('/api/v2/torrents/add', { method: 'POST', body: form })).body?.cancel();
+      return true;
+    } catch (err) {
+      if (err instanceof QbitError && err.status === 409) return false;
+      throw err;
+    }
+  }
+
+  private async action(path: string, fields: Record<string, string>): Promise<void> {
+    await (await this.form(path, fields)).body?.cancel();
+  }
+
+  start(hashes: string[]) {
+    return this.action('/api/v2/torrents/start', { hashes: hashes.join('|') });
+  }
+  stop(hashes: string[]) {
+    return this.action('/api/v2/torrents/stop', { hashes: hashes.join('|') });
+  }
+  recheck(hashes: string[]) {
+    return this.action('/api/v2/torrents/recheck', { hashes: hashes.join('|') });
+  }
+  delete(hashes: string[], deleteFiles: boolean) {
+    return this.action('/api/v2/torrents/delete', { hashes: hashes.join('|'), deleteFiles: String(deleteFiles) });
+  }
+  addTags(hashes: string[], tags: string[]) {
+    return this.action('/api/v2/torrents/addTags', { hashes: hashes.join('|'), tags: tags.join(',') });
+  }
+  removeTags(hashes: string[], tags: string[]) {
+    return this.action('/api/v2/torrents/removeTags', { hashes: hashes.join('|'), tags: tags.join(',') });
+  }
+  /** 0 = don't download, 1 = normal. */
+  setFilePriority(hash: string, ids: number[], priority: 0 | 1) {
+    return this.action('/api/v2/torrents/filePrio', { hash, id: ids.join('|'), priority: String(priority) });
+  }
+  toggleSequential(hashes: string[]) {
+    return this.action('/api/v2/torrents/toggleSequentialDownload', { hashes: hashes.join('|') });
+  }
 }
+
+/** Splits qBittorrent's "a, b" tag string. */
+export const tagList = (tags: string): string[] =>
+  tags
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);

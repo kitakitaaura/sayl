@@ -25,6 +25,9 @@ export function desiredPreferences(c: Config): QbitPreferences {
     current_network_interface: '',
     current_interface_address: '',
     anonymous_mode: false,
+    // stop trackers and web seeds from reaching private addresses, and peers on ports below 1024
+    ssrf_mitigation: true,
+    block_peers_on_privileged_ports: true,
     // global caps
     queueing_enabled: true,
     max_active_torrents: c.GLOBAL_MAX_ACTIVE_TORRENTS,
