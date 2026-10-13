@@ -2,7 +2,7 @@
 
 **Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents on a server and hands you the files over HTTPS. Paste a magnet link or drop a `.torrent`, pick files, download them in the browser.
 
-> Status: **stage 2 of 5**. The Docker stack and the backend API (sessions, torrents, live updates, downloads) work. The UI, quotas and cleanup, and the full docs land in later stages.
+> Status: **stage 3 of 5**. The Docker stack, the backend API and the web UI work. Quotas, cleanup, rate limits, the access code and captcha (stage 4) and the full deploy guide (stage 5) are next.
 
 ## How it fits together
 
@@ -49,11 +49,23 @@ For downloads to work locally, also set `DL_PUBLIC_URL=http://localhost:8081` an
 
 `sayl-admin status` prints the qBittorrent version and the protocol settings it's actually running with (DHT, PEX, LSD, TCP + uTP, encryption, port, IPv4 + IPv6, caps), and says whether they match `.env`.
 
-Frontend:
+Frontend (talks to the API on `localhost:8080`):
 
 ```sh
-cd frontend && npm install && npm run dev
+cd frontend && npm install && npm run dev    # http://localhost:5173
 ```
+
+The site is plain static files (SvelteKit, every page prerendered). Build-time settings, set in Cloudflare Pages under *Settings → Variables*:
+
+| Variable | Example | Default |
+|---|---|---|
+| `API_URL` | `https://sayl-api.kitaaura.com` | `http://localhost:8080` |
+| `SITE_URL` | `https://sayl.kitaaura.com` | `https://sayl.kitaaura.com` |
+| `APP_NAME` | `Sayl` | `name` in `brand.json` |
+| `ABUSE_EMAIL` | `abuse@kitaaura.com` | `abuseEmail` in `brand.json` |
+| `TURNSTILE_SITE_KEY` | from Cloudflare Turnstile | empty (captcha off) |
+
+Fonts (IBM Plex Mono, Inter) are bundled from `@fontsource`, icons are [Lucide](https://lucide.dev). Theme, motion and download preferences stay in the browser's localStorage.
 
 ## Deploying (outline)
 

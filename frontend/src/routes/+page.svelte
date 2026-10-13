@@ -1,41 +1,138 @@
 <script lang="ts">
-  // Placeholder until stage 3 builds the approved UI.
-  import { APP_NAME, APP_NAME_ARABIC } from '$lib/config';
+  import Check from '@lucide/svelte/icons/check';
+  import Omnibox from '$lib/components/Omnibox.svelte';
+  import TorrentCard from '$lib/components/TorrentCard.svelte';
+  import Wordmark from '$lib/components/Wordmark.svelte';
+  import { APP_NAME } from '$lib/config';
+  import { app } from '$lib/state/app.svelte';
+  import { settings } from '$lib/state/settings.svelte';
+
+  let fileInput: HTMLInputElement;
+
+  const chips = [
+    { key: 'sequential', label: 'sequential' },
+    { key: 'seed', label: 'seed after' },
+    { key: 'select', label: 'select files' },
+  ] as const;
+
+  function toggle(key: (typeof chips)[number]['key']) {
+    app.chips[key] = !app.chips[key];
+    if (key === 'select') settings.set('selectFiles', app.chips.select);
+  }
+
+  async function picked() {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file) await app.addFile(file);
+  }
 </script>
 
 <svelte:head>
   <title>{APP_NAME}</title>
-  <meta name="description" content="{APP_NAME} downloads torrents on a server and hands you the files over https." />
 </svelte:head>
 
-<main>
-  <h1>{APP_NAME.toLowerCase()} <span lang="ar" dir="rtl">{APP_NAME_ARABIC}</span></h1>
-  <p>coming soon</p>
-</main>
+<div class="page">
+  <div class="col">
+    <h1 class="sr">{APP_NAME}</h1>
+    <Wordmark />
+    <Omnibox />
+    <div class="chips" role="group" aria-label="options">
+      {#each chips as c (c.key)}
+        <button type="button" class="chip" role="switch" aria-checked={app.chips[c.key]} onclick={() => toggle(c.key)}>
+          <span class="tick"><Check size={12} strokeWidth={3} aria-hidden="true" /></span>{c.label}
+        </button>
+      {/each}
+    </div>
+    <p class="hint">
+      or drop a .torrent file anywhere ·
+      <button type="button" class="linkish" onclick={() => fileInput.click()}>choose one</button>
+    </p>
+    <input bind:this={fileInput} type="file" accept=".torrent,application/x-bittorrent" hidden onchange={picked} />
+
+    {#if app.status === 'offline'}
+      <p class="status" role="status">can't reach {APP_NAME.toLowerCase()} right now. retrying…</p>
+    {/if}
+
+    {#if app.visible.length}
+      <section class="list" aria-label="your torrents">
+        {#each app.visible as t (t.hash)}
+          <TorrentCard {t} />
+        {/each}
+      </section>
+    {/if}
+  </div>
+</div>
 
 <style>
-  main {
-    min-height: 100vh;
-    display: grid;
-    place-content: center;
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 8px;
-    padding-inline: 16px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 12px 0 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--fg-2);
+    font-size: 12.5px;
+  }
+  .tick {
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    border: 1.5px solid var(--border-strong);
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition:
+      background-color var(--fast),
+      border-color var(--fast);
+  }
+  .chip[aria-checked='true'] {
+    color: var(--fg);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    background: var(--accent-soft);
+  }
+  .chip[aria-checked='true'] .tick {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+  }
+  .hint {
+    margin: 0;
     text-align: center;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: #0b0c0d;
-    color: #e9edef;
+    font-size: 12px;
+    color: var(--muted);
   }
-  h1 {
+  .linkish {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fg-2);
+    font-size: inherit;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--border-strong);
+  }
+  .linkish:hover {
+    color: var(--fg);
+  }
+  .status {
     margin: 0;
-    font-size: 30px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--warn);
   }
-  span {
-    font-family: system-ui, sans-serif;
-    font-size: 15px;
-    color: #808b91;
-  }
-  p {
-    margin: 0;
-    color: #808b91;
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
   }
 </style>

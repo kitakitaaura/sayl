@@ -1,0 +1,347 @@
+/*
+ * Sayl design tokens and shared styles.
+ * Dark by default. Themes come from data-theme on <html> ("dark" or "light");
+ * with no attribute ("auto") the system preference decides.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #0b0c0d;
+  --surface: #141617;
+  --surface-2: #1b1e20;
+  --surface-3: #25292c;
+  --border: #232729;
+  --border-strong: #343a3e;
+  --fg: #e9edef;
+  --fg-2: #b8c1c6;
+  --muted: #808b91;
+  --accent: #62aebf;
+  --accent-soft: rgba(98, 174, 191, 0.14);
+  --on-accent: #081315;
+  --primary: #e9edef;
+  --on-primary: #0b0c0d;
+  --ok: #6cc08b;
+  --warn: #d8b25a;
+  --err: #e47f76;
+  --backdrop: rgba(0, 0, 0, 0.62);
+  --shadow: 0 10px 32px rgba(0, 0, 0, 0.4);
+
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --arabic: system-ui, 'Segoe UI', 'Noto Sans Arabic', 'Geeza Pro', sans-serif;
+
+  --r-card: 16px;
+  --r-box: 20px;
+  --r-btn: 12px;
+  --fast: 120ms;
+  --med: 180ms;
+  --nav-w: 84px;
+  --col-w: 460px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #f4f6f7;
+    --surface-2: #eceff1;
+    --surface-3: #dfe4e7;
+    --border: #e0e5e8;
+    --border-strong: #ccd3d7;
+    --fg: #0f1315;
+    --fg-2: #38434a;
+    --muted: #5f6b72;
+    --accent: #23798c;
+    --accent-soft: rgba(35, 121, 140, 0.12);
+    --on-accent: #ffffff;
+    --primary: #0f1315;
+    --on-primary: #ffffff;
+    --ok: #2c8650;
+    --warn: #94680f;
+    --err: #c0433a;
+    --backdrop: rgba(15, 19, 21, 0.36);
+    --shadow: 0 10px 32px rgba(15, 19, 21, 0.12);
+  }
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f4f6f7;
+  --surface-2: #eceff1;
+  --surface-3: #dfe4e7;
+  --border: #e0e5e8;
+  --border-strong: #ccd3d7;
+  --fg: #0f1315;
+  --fg-2: #38434a;
+  --muted: #5f6b72;
+  --accent: #23798c;
+  --accent-soft: rgba(35, 121, 140, 0.12);
+  --on-accent: #ffffff;
+  --primary: #0f1315;
+  --on-primary: #ffffff;
+  --ok: #2c8650;
+  --warn: #94680f;
+  --err: #c0433a;
+  --backdrop: rgba(15, 19, 21, 0.36);
+  --shadow: 0 10px 32px rgba(15, 19, 21, 0.12);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  transition:
+    transform var(--fast) ease,
+    background-color var(--fast) ease,
+    border-color var(--fast) ease,
+    color var(--fast) ease,
+    opacity var(--fast) ease;
+}
+button:active:not(:disabled):not([aria-disabled='true']),
+a.btn:active {
+  transform: scale(0.96);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+a {
+  color: var(--accent);
+}
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- page layout ---- */
+.page {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  justify-content: safe center;
+  padding-block: 40px;
+  padding-inline: 16px;
+}
+.page.top {
+  justify-content: flex-start;
+}
+.col {
+  width: 100%;
+  max-width: var(--col-w);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.col.wide {
+  max-width: 520px;
+}
+h1.ttl {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---- buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r-btn);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--border-strong);
+}
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+  font-weight: 500;
+}
+.btn.danger {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, var(--border));
+}
+.btn.sm {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+.btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+}
+.icon-btn:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.icon-btn.bare {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 999px;
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.icon-btn.accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+}
+
+/* ---- prose pages (about, terms) ---- */
+.prose {
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--fg-2);
+  gap: 0;
+}
+.prose h1 {
+  margin: 0 0 12px;
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.prose h2 {
+  margin: 22px 0 6px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  text-wrap: balance;
+}
+.prose p {
+  margin: 0 0 12px;
+}
+.prose ol,
+.prose ul {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.prose li {
+  margin-bottom: 4px;
+}
+.prose .mono {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  color: var(--fg);
+}
+.arabic {
+  font-family: var(--arabic);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes up {
+  from {
+    opacity: 0.4;
+    transform: translateY(28px);
+  }
+}
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+@keyframes flow {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+html.rm *,
+html.rm *::before,
+html.rm *::after {
+  animation: none !important;
+  transition: none !important;
+}

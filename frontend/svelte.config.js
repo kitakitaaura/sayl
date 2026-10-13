@@ -5,6 +5,7 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 export default {
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter({ pages: 'build', assets: 'build', strict: true }),
+    // 404.html is served by Pages for unknown paths and renders the error page
+    adapter: adapter({ pages: 'build', assets: 'build', fallback: '404.html', strict: true }),
   },
 };
