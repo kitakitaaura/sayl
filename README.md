@@ -2,7 +2,7 @@
 
 **Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents on a server and hands you the files over HTTPS. Paste a magnet link or drop a `.torrent`, pick files, download them in the browser.
 
-> Status: **stage 4 of 5**. Everything works: the Docker stack, the API, the web UI, quotas, cleanup, rate limits, the access code, the captcha and the admin commands. The step-by-step deploy guide and a real-swarm smoke test (stage 5) are next.
+**To put it online, follow [docs/DEPLOY.md](docs/DEPLOY.md).** To try it on your own computer, see *Run it locally* below.
 
 ## How it fits together
 
@@ -67,15 +67,17 @@ The site is plain static files (SvelteKit, every page prerendered). Build-time s
 
 Fonts (IBM Plex Mono, Inter) are bundled from `@fontsource`, icons are [Lucide](https://lucide.dev). Theme, motion and download preferences stay in the browser's localStorage.
 
-## Deploying (outline)
+## Deploying
 
-A step-by-step guide comes in stage 5. The shape of it:
+[docs/DEPLOY.md](docs/DEPLOY.md) walks through everything: the Oracle VM, its two firewalls, Docker, the Cloudflare tunnel, DNS, Turnstile, Pages, testing and day-to-day running.
 
-1. **Oracle Cloud:** create an Always Free Ampere (ARM) VM with Ubuntu. Open TCP 80, TCP + UDP 443 and TCP + UDP `TORRENT_PORT` (default 6881) in the VCN security list *and* in the VM's own firewall (Oracle's Ubuntu images block ports with iptables by default). Install Docker.
-2. **Cloudflare Tunnel:** in Zero Trust, create a tunnel, copy its token into `TUNNEL_TOKEN`, and add the public hostname `sayl-api.kitaaura.com` → `http://backend:8080`.
-3. **DNS:** add an `A` (and `AAAA` if the VM has IPv6) record for `sayl-dl` pointing at the VM, with the proxy **off** (grey cloud).
-4. **VPS:** clone this repo, `cp .env.example .env`, fill it in, `docker compose up -d --build --wait`.
-5. **Cloudflare Pages:** connect the repo, root directory `frontend`, build command `npm run build`, output directory `build`. Set `APP_NAME`, `API_URL=https://sayl-api.kitaaura.com` and `TURNSTILE_SITE_KEY`. Add the custom domain `sayl.kitaaura.com`.
+To check a live deployment end to end from any computer with Node.js 22:
+
+```sh
+node scripts/smoke.mjs https://sayl-api.kitaaura.com [--code <access code>] [--full]
+```
+
+It adds the current Debian netinst ISO, waits for the server to download it from real peers, checks the download link (and with `--full`, the whole file against Debian's SHA-256), then removes it.
 
 ### qBittorrent settings
 
