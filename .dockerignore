@@ -1,0 +1,11 @@
+# The backend image builds from the repo root. Keep downloads, secrets and
+# other packages out of the build context.
+data
+.env
+.env.*
+.git
+**/node_modules
+**/dist
+frontend
+deploy
+*.md

@@ -1,0 +1,14 @@
+# Serves only /dl/* on the DNS-only download domain, with an automatic
+# Let's Encrypt certificate. Everything else gets a 404.
+{$DL_DOMAIN} {
+	@dl path /dl/*
+	handle @dl {
+		reverse_proxy backend:8081 {
+			flush_interval -1
+		}
+	}
+	handle {
+		respond 404
+	}
+	header -Server
+}

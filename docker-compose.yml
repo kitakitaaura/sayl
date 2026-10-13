@@ -1,0 +1,116 @@
+# Sayl on one VPS. Copy .env.example to .env, fill it in, then: docker compose up -d
+#
+#   internet ── cloudflare tunnel ──> cloudflared ──> backend:8080  (api, sayl-api.*)
+#   internet ── :443 (dns only) ────> caddy ────────> backend:8081  (files, sayl-dl.*)
+#   peers ───── :TORRENT_PORT ──────> qbittorrent
+#   backend ──> qbittorrent:8080 (web api, never published)
+#
+# cloudflared and caddy only run with COMPOSE_PROFILES=public (set in .env on the VPS).
+
+name: sayl
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  qbit-init:
+    image: node:22.23.3-alpine
+    command: ["node", "/init/init.mjs"]
+    environment:
+      QBIT_USERNAME: ${QBIT_USERNAME:?set QBIT_USERNAME in .env}
+      QBIT_PASSWORD: ${QBIT_PASSWORD:?set QBIT_PASSWORD in .env}
+      TORRENT_PORT: ${TORRENT_PORT:-6881}
+      QBIT_CONFIG_DIR: /config/qBittorrent
+    volumes:
+      - ./deploy/qbit-init:/init:ro
+      - ./data/qbittorrent:/config
+    network_mode: none
+    restart: "no"
+    logging: *logging
+
+  qbittorrent:
+    image: linuxserver/qbittorrent:5.2.4
+    depends_on:
+      qbit-init:
+        condition: service_completed_successfully
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      WEBUI_PORT: "8080"
+      TORRENTING_PORT: ${TORRENT_PORT:-6881}
+    volumes:
+      - ./data/qbittorrent:/config
+      - ./data/downloads:/downloads
+    # Only the peer port is published. The web UI on 8080 stays on the internal network.
+    ports:
+      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/tcp"
+      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/udp"
+    networks: [sayl]
+    restart: unless-stopped
+    logging: *logging
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    environment:
+      QBIT_URL: http://qbittorrent:8080
+      HOST: 0.0.0.0
+      API_PORT: "8080"
+      DL_PORT: "8081"
+    depends_on:
+      - qbittorrent
+    volumes:
+      - ./data/downloads:/downloads
+      - ./data/backend:/data
+    # Loopback only, for `curl localhost:8080/api/health` on the VPS. Public traffic arrives through cloudflared and caddy.
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks: [sayl]
+    restart: unless-stopped
+    logging: *logging
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.0
+    profiles: [public]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - backend
+    networks: [sayl]
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    profiles: [public]
+    environment:
+      DL_DOMAIN: ${DL_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    networks: [sayl]
+    restart: unless-stopped
+    logging: *logging
+
+networks:
+  sayl:
+    # Lets peers reach qbittorrent over IPv6. Set ENABLE_IPV6=false on hosts with IPv6 turned off in the kernel.
+    enable_ipv6: ${ENABLE_IPV6:-true}
+
+volumes:
+  caddy_data:
+  caddy_config:
