@@ -68,6 +68,10 @@ export interface TorrentRow {
   state: string;
   size: number;
   progress: number;
+  uploaded: number;
+  ratio: number;
+  upSpeed: number;
+  peers: number;
   owners: { ip: string; addedAt: number; completedAt: number | null }[];
 }
 
@@ -81,6 +85,10 @@ export async function listTorrents(db: Db, q: QbitClient): Promise<TorrentRow[]>
       state: t?.state ?? 'missing',
       size: t ? Math.max(0, t.size) : 0,
       progress: t?.progress ?? 0,
+      uploaded: t?.uploaded ?? 0,
+      ratio: t?.ratio ?? 0,
+      upSpeed: t?.upspeed ?? 0,
+      peers: (t?.num_leechs ?? 0) + (t?.num_seeds ?? 0),
       owners: db.ownersOf(hash).map((o) => ({ ip: o.ip, addedAt: o.addedAt, completedAt: o.completedAt })),
     };
   });

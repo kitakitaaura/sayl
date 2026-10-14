@@ -13,6 +13,8 @@ export interface TorrentView {
   downloaded: number;
   dlSpeed: number;
   upSpeed: number;
+  /** bytes uploaded in total */
+  uploaded: number;
   eta: number | null;
   peers: number;
   seeds: number;

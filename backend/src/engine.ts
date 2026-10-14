@@ -29,6 +29,8 @@ export interface TorrentView {
   downloaded: number;
   dlSpeed: number;
   upSpeed: number;
+  /** bytes this torrent has uploaded in total (shared by everyone who owns it) */
+  uploaded: number;
   /** seconds, or null when unknown */
   eta: number | null;
   peers: number;
@@ -315,6 +317,7 @@ export class Engine extends EventEmitter {
       downloaded: sel ? Math.round(sel.done) : 0,
       dlSpeed,
       upSpeed: state === 'paused' || state === 'done' ? 0 : (t?.upspeed ?? 0),
+      uploaded: t?.uploaded ?? 0,
       eta: downloading && dlSpeed > 0 ? Math.round(remaining / dlSpeed) : null,
       peers: t?.num_leechs ?? 0,
       seeds: t?.num_seeds ?? 0,

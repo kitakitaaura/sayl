@@ -69,6 +69,7 @@ async function main(argv: string[]): Promise<number> {
         if (!rows.length) console.log('no torrents');
         for (const r of rows) {
           console.log(`${r.hash}  ${r.state.padEnd(11)} ${size(r.size).padStart(10)}  ${(r.progress * 100).toFixed(0).padStart(3)}%  ${r.owners.length} owner${r.owners.length === 1 ? '' : 's'}  ${r.name}`);
+          console.log(`    uploaded ${size(r.uploaded)} · ratio ${r.ratio.toFixed(3)} · up ${size(r.upSpeed)}/s · ${r.peers} peers connected`);
           if (flags.has('--ips')) for (const o of r.owners) console.log(`    ${o.ip}  added ${when(o.addedAt)}${o.completedAt ? `  finished ${when(o.completedAt)}` : ''}`);
         }
         return 0;

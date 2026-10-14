@@ -30,6 +30,7 @@ export interface FakeTorrent {
   upspeed: number;
   num_seeds: number;
   num_leechs: number;
+  uploaded: number;
   added_on: number;
   /** what was submitted to torrents/add */
   addedWith: Record<string, string>;
@@ -92,7 +93,7 @@ function info(t: FakeTorrent) {
     added_on: t.added_on,
     amount_left: 0,
     downloaded: 0,
-    uploaded: 0,
+    uploaded: t.uploaded,
   };
 }
 
@@ -186,7 +187,7 @@ export async function startFakeQbit(username = 'sayl', password = 'correct horse
         const tags = new Set((fields.tags ?? '').split(',').filter(Boolean));
         const file = fd.get('torrents');
         let t: FakeTorrent;
-        const base = { tags, seq_dl: false, ratio: 0, dlspeed: 0, upspeed: 0, num_seeds: 5, num_leechs: 2, added_on: Math.floor(Date.now() / 1000), addedWith: fields };
+        const base = { tags, seq_dl: false, ratio: 0, dlspeed: 0, upspeed: 0, num_seeds: 5, num_leechs: 2, uploaded: 0, added_on: Math.floor(Date.now() / 1000), addedWith: fields };
         if (file && typeof file !== 'string') {
           const p = parseTorrent(Buffer.from(await file.arrayBuffer()));
           if (torrents.has(p.hash)) return send(409, 'Conflict');

@@ -174,6 +174,17 @@ describe('seeding', () => {
     expect(h.fake.torrents.get(H)!.state).toBe('stoppedUP');
   });
 
+  it('reports upload totals while seeding', async () => {
+    await u.post(`/api/torrents/${H}/select`, { files: [0], seed: true });
+    h.fake.complete(H);
+    const t = h.fake.torrents.get(H)!;
+    t.uploaded = 4321;
+    t.upspeed = 1000;
+    t.ratio = 0.004;
+    await h.tick();
+    expect(await view(H)).toMatchObject({ state: 'seeding', uploaded: 4321, upSpeed: 1000, ratio: 0.004 });
+  });
+
   it('stops at the ratio limit', async () => {
     await u.post(`/api/torrents/${H}/select`, { files: [0], seed: true, ratioLimit: 0.5 });
     h.fake.complete(H);

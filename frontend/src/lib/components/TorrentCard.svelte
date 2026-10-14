@@ -45,6 +45,8 @@
     if (settings.prefs.showHashes) parts.push(t.hash);
     return parts.join(' · ');
   });
+  // a tiny ratio would round to 0.00 and look like nothing was shared
+  const ratio = (r: number) => (r > 0 && r < 0.01 ? '<0.01' : r.toFixed(2));
   const active = $derived(['queued', 'downloading', 'stalled'].includes(t.state));
   const canPause = $derived(active || t.state === 'seeding');
 
@@ -94,7 +96,8 @@
         <span title="peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
       {:else if t.state === 'seeding'}
         <span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>
-        <span>ratio {t.ratio.toFixed(2)}</span>
+        <span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span>
+        <span title="connected peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
         {#if t.seedEndsAt}<span title="seeding stops in"><Clock size={13} aria-hidden="true" />stops in {fmtDur((t.seedEndsAt - app.now) / 1000)}</span>{/if}
       {:else if t.state === 'metadata'}
         <span>fetching the file list from peers…</span>
@@ -107,7 +110,7 @@
       {:else if t.state === 'error'}
         <span>something went wrong with this torrent. try a recheck, or remove it.</span>
       {:else}
-        <span>ratio {t.ratio.toFixed(2)}</span><span>ready to download</span>
+        <span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span><span>ready to download</span>
       {/if}
     </div>
 
