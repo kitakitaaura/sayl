@@ -84,6 +84,21 @@ export interface QbitFile {
   priority: number;
 }
 
+/** One peer from /api/v2/sync/torrentPeers. */
+export interface QbitPeer {
+  ip: string;
+  port: number;
+  client: string;
+  /** e.g. "D U I X": see `sayl-admin peers` for the legend */
+  flags: string;
+  connection: string;
+  progress: number;
+  up_speed: number;
+  dl_speed: number;
+  uploaded: number;
+  downloaded: number;
+}
+
 export type AddSource = { magnet: string } | { file: Buffer; filename: string };
 
 export interface TransferInfo {
@@ -189,6 +204,23 @@ export class QbitClient {
   async torrents(hashes?: string[]): Promise<QbitTorrent[]> {
     const q = hashes ? `?hashes=${hashes.join('|')}` : '';
     return (await (await this.request(`/api/v2/torrents/info${q}`)).json()) as QbitTorrent[];
+  }
+
+  /** Peers currently connected to a torrent, or null if qBittorrent doesn't know the hash. */
+  async peers(hash: string): Promise<QbitPeer[] | null> {
+    try {
+      const res = await this.request(`/api/v2/sync/torrentPeers?hash=${hash}&rid=0`);
+      const data = (await res.json()) as { peers?: Record<string, QbitPeer> };
+      return Object.values(data.peers ?? {});
+    } catch (err) {
+      if (err instanceof QbitError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** 1 when qBittorrent's alternative (slow) speed limits are switched on. */
+  async speedLimitsMode(): Promise<number> {
+    return Number((await (await this.request('/api/v2/transfer/speedLimitsMode')).text()).trim());
   }
 
   /** The torrent's files, or null if qBittorrent doesn't know the hash. */

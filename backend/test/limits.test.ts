@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { banIp, blockTorrent, listTorrents, normaliseHash, unbanIp, unblockTorrent } from '../src/admin.js';
+import { banIp, blockTorrent, listTorrents, normaliseHash, torrentPeers, unbanIp, unblockTorrent } from '../src/admin.js';
 import type { TorrentView } from '../src/engine.js';
 import { RateLimiter } from '../src/limits.js';
 import { QbitClient } from '../src/qbit.js';
@@ -238,6 +238,11 @@ describe('blocklist and bans', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ hash: hashOf(1), name: 't1', size: 5 * GB, owners: [{ ip: '192.0.2.10' }] });
     expect(() => normaliseHash('nope')).toThrow(/info hash/);
+    const peer = { ip: '198.51.100.1', port: 51413, client: 'qBittorrent/5.1.0', flags: 'U I', connection: 'BT', progress: 0.5, up_speed: 900, dl_speed: 0, uploaded: 5000, downloaded: 0 };
+    h.fake.torrents.get(hashOf(1))!.peers = [{ ...peer, ip: '198.51.100.2', up_speed: 0 }, peer];
+    const p = await torrentPeers(q, hashOf(1).toUpperCase());
+    expect(p.peers.map((x) => x.ip)).toEqual(['198.51.100.1', '198.51.100.2']);
+    await expect(torrentPeers(q, hashOf(9))).rejects.toThrow(/isn't on the server/);
     await expect(banIp(h.db, q, 'not-an-ip', '', 0, false)).rejects.toThrow(/IP address/);
   });
 });

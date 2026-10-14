@@ -4,7 +4,7 @@
  * There is no public admin endpoint.
  */
 import { join } from 'node:path';
-import { AdminError, banIp, blockTorrent, listTorrents, unbanIp, unblockTorrent } from './admin.js';
+import { AdminError, banIp, blockTorrent, listTorrents, torrentPeers, unbanIp, unblockTorrent } from './admin.js';
 import { loadConfig, type Config } from './config.js';
 import { Db } from './db.js';
 import { verifyPreferences } from './protocol.js';
@@ -15,6 +15,7 @@ const USAGE = `usage: sayl-admin <command>
 commands:
   status                        qBittorrent version, protocol settings and connection state
   list [--ips]                  every torrent on the server, with owner count (and their IPs)
+  peers <hash|magnet>           the peers connected to one torrent and what they're doing
   block <hash|magnet> [reason]  delete a torrent for everyone and stop it being added again
   unblock <hash|magnet>         allow a blocked torrent again
   ban-ip <ip> [reason] [--purge]
@@ -42,6 +43,8 @@ async function status(cfg: Config, q: QbitClient): Promise<number> {
     `download cap   ${prefs.dl_limit ? `${Math.round(Number(prefs.dl_limit) / 1024)} KiB/s` : 'unlimited'}`,
     `max active     ${prefs.max_active_torrents}`,
     `connection     ${transfer.connection_status} · ${transfer.dht_nodes} dht nodes`,
+    `slow mode      ${(await q.speedLimitsMode()) === 1 ? 'ON (alternative speed limits are active)' : 'off'}`,
+    `upload slots   ${prefs.max_uploads} total, ${prefs.max_uploads_per_torrent} per torrent`,
     report.mismatches.length ? `\nsettings that differ from .env:\n  ${report.mismatches.join('\n  ')}` : 'settings match .env',
   ];
   console.log(lines.join('\n'));
@@ -72,6 +75,23 @@ async function main(argv: string[]): Promise<number> {
           console.log(`    uploaded ${size(r.uploaded)} · ratio ${r.ratio.toFixed(3)} · up ${size(r.upSpeed)}/s · ${r.peers} peers connected`);
           if (flags.has('--ips')) for (const o of r.owners) console.log(`    ${o.ip}  added ${when(o.addedAt)}${o.completedAt ? `  finished ${when(o.completedAt)}` : ''}`);
         }
+        return 0;
+      }
+      case 'peers': {
+        if (!args[0]) throw new AdminError('usage: sayl-admin peers <hash|magnet>');
+        const r = await torrentPeers(q, args[0]);
+        console.log(`${r.name} · ${r.state} · uploaded ${size(r.uploaded)} · up ${size(r.upSpeed)}/s · ${r.peers.length} peers`);
+        for (const p of r.peers) {
+          const addr = p.ip.includes(':') ? `[${p.ip}]:${p.port}` : `${p.ip}:${p.port}`;
+          console.log(
+            `  ${addr.padEnd(47)} ${(p.flags || '-').padEnd(12)} ${String(Math.round(p.progress * 100)).padStart(3)}%  up ${size(p.up_speed)}/s  sent ${size(p.uploaded)}  down ${size(p.dl_speed)}/s  ${p.connection}  ${p.client}`,
+          );
+        }
+        console.log(
+          '\nflags: D/U = downloading from / uploading to them · d = we want data, they refuse · u = they want data, we refuse\n' +
+            '       I = they connected to us · K = they unchoked us, we are not interested · ? = we unchoked them, they are not interested\n' +
+            '       X = found by PEX · H = found by DHT · E/e = encrypted · P = uTP · S = snubbed · O = optimistic unchoke',
+        );
         return 0;
       }
       case 'block': {

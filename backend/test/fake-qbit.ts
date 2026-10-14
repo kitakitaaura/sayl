@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { decode, type BDict, type BValue } from '../src/bencode.js';
+import type { QbitPeer } from '../src/qbit.js';
 
 /**
  * An in-memory stand-in for qBittorrent 5.2's Web API, covering what Sayl
@@ -34,6 +35,7 @@ export interface FakeTorrent {
   added_on: number;
   /** what was submitted to torrents/add */
   addedWith: Record<string, string>;
+  peers: QbitPeer[];
 }
 
 export interface FakeQbit {
@@ -175,6 +177,13 @@ export async function startFakeQbit(username = 'sayl', password = 'correct horse
         const list = [...torrents.values()].filter((t) => !want || hashes(want).includes(t.hash));
         return json(list.map(info));
       }
+      case '/api/v2/transfer/speedLimitsMode':
+        return send(200, '0');
+      case '/api/v2/sync/torrentPeers': {
+        const t = torrents.get(url.searchParams.get('hash') ?? '');
+        if (!t) return send(404, 'Not Found');
+        return json({ full_update: true, rid: 1, peers: Object.fromEntries(t.peers.map((p) => [`${p.ip}:${p.port}`, p])) });
+      }
       case '/api/v2/torrents/files': {
         const t = torrents.get(url.searchParams.get('hash') ?? '');
         if (!t) return send(404, 'Not Found');
@@ -187,7 +196,7 @@ export async function startFakeQbit(username = 'sayl', password = 'correct horse
         const tags = new Set((fields.tags ?? '').split(',').filter(Boolean));
         const file = fd.get('torrents');
         let t: FakeTorrent;
-        const base = { tags, seq_dl: false, ratio: 0, dlspeed: 0, upspeed: 0, num_seeds: 5, num_leechs: 2, uploaded: 0, added_on: Math.floor(Date.now() / 1000), addedWith: fields };
+        const base = { tags, seq_dl: false, ratio: 0, dlspeed: 0, upspeed: 0, num_seeds: 5, num_leechs: 2, uploaded: 0, peers: [] as QbitPeer[], added_on: Math.floor(Date.now() / 1000), addedWith: fields };
         if (file && typeof file !== 'string') {
           const p = parseTorrent(Buffer.from(await file.arrayBuffer()));
           if (torrents.has(p.hash)) return send(409, 'Conflict');

@@ -6,7 +6,7 @@
 import { isIP } from 'node:net';
 import type { Db } from './db.js';
 import { ownerTag } from './engine.js';
-import type { QbitClient } from './qbit.js';
+import type { QbitClient, QbitPeer } from './qbit.js';
 import { isInfoHash, parseMagnet } from './torrent-input.js';
 
 export class AdminError extends Error {}
@@ -92,4 +92,14 @@ export async function listTorrents(db: Db, q: QbitClient): Promise<TorrentRow[]>
       owners: db.ownersOf(hash).map((o) => ({ ip: o.ip, addedAt: o.addedAt, completedAt: o.completedAt })),
     };
   });
+}
+
+/** The peers connected to one torrent, busiest uploads first. */
+export async function torrentPeers(q: QbitClient, input: string): Promise<{ hash: string; name: string; state: string; uploaded: number; upSpeed: number; peers: QbitPeer[] }> {
+  const hash = normaliseHash(input);
+  const [t] = await q.torrents([hash]);
+  if (!t) throw new AdminError(`${hash} isn't on the server`);
+  const peers = (await q.peers(hash)) ?? [];
+  peers.sort((a, b) => b.up_speed - a.up_speed || b.uploaded - a.uploaded);
+  return { hash, name: t.name, state: t.state, uploaded: t.uploaded, upSpeed: t.upspeed, peers };
 }
