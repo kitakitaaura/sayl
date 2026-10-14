@@ -214,6 +214,7 @@ This deletes it for everyone and stops anyone adding it again. For repeat abuse 
 | Requests fail with "requests from other sites are not allowed" | `FRONTEND_ORIGIN` doesn't match. |
 | "the captcha isn't set up on this site yet" | `TURNSTILE_SECRET_KEY` is set on the VM but `TURNSTILE_SITE_KEY` isn't set in Pages (or Pages wasn't redeployed). |
 | `status` says **firewalled** | Port 6881 TCP/UDP isn't open in both firewalls. |
+| Seeding uploads almost nothing | Run `sayl-admin peers <hash>` (the hash is the first column of `sayl-admin list`) after a few minutes of seeding something popular. Peers marked `I` connected to you; if none ever do, port 6881 isn't reachable from outside (step 2). Peers marked `U` are receiving data. Very popular torrents with many seeds and few downloaders upload little even when everything works. |
 | `docker compose up` fails with an IPv6 error | Set `ENABLE_IPV6=false` in `.env`. |
 | Everyone gets "your network already has…" | Your testers share one address: raise `MAX_ACTIVE_PER_IP` and `MAX_STORAGE_PER_IP_GB`. |
 
