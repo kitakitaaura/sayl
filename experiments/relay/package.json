@@ -1,0 +1,18 @@
+{
+  "name": "sayl-relay",
+  "private": true,
+  "type": "module",
+  "description": "Experiment: a BitTorrent client in the browser, with Cloudflare relaying its TCP connections",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/unit.test.mjs",
+    "test:local": "node test/local.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.145.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,22 @@
+name = "sayl-relay"
+main = "worker/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# The test page and the browser client, served from the same address as the relay.
+[assets]
+directory = "public"
+
+[[durable_objects.bindings]]
+name = "SESSIONS"
+class_name = "Session"
+
+# Free-plan accounts can only use SQLite-backed Durable Objects.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Session"]
+
+# To require ?token=… on every tunnel, set a secret: npx wrangler secret put ACCESS_TOKEN
+[vars]
+# "1" lets the relay reach private addresses. Only for local testing.
+ALLOW_PRIVATE_TARGETS = "0"
