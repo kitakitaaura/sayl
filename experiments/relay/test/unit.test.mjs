@@ -85,3 +85,37 @@ test('relay policy: targets', () => {
   assert.equal(target('host=a b&port=1').error, 'bad host');
   assert.equal(target('port=1').error, 'missing host');
 });
+
+test('md5 matches the RFC 1321 test vectors', async () => {
+  const { md5 } = await import('../public/client/md5.js');
+  const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  assert.equal(hex(md5(bytes(''))), 'd41d8cd98f00b204e9800998ecf8427e');
+  assert.equal(hex(md5(bytes('abc'))), '900150983cd24fb0d6963f7d28e17f72');
+  assert.equal(hex(md5(bytes('12345678901234567890123456789012345678901234567890123456789012345678901234567890'))), '57edf4a22be3c955ac49da2e2107b67a');
+});
+
+test('stun messages and xor addresses round trip', async () => {
+  const { stunMessage, parseStun, encodeXorAddress, decodeXorAddress, withIntegrity } = await import('../public/client/turn.js');
+  const txid = new Uint8Array(12).fill(9);
+  const msg = stunMessage(0x0016, [[0x0012, encodeXorAddress('203.0.113.7', 6881)], [0x0013, bytes('hello')]], txid);
+  const parsed = parseStun(msg);
+  assert.equal(parsed.type, 0x0016);
+  assert.deepEqual(decodeXorAddress(parsed.attrs.get(0x0012), parsed.txid), { host: '203.0.113.7', port: 6881 });
+  assert.equal(new TextDecoder().decode(parsed.attrs.get(0x0013)), 'hello');
+  const signed = await withIntegrity(msg, new Uint8Array(16));
+  assert.equal(signed.length, msg.length + 24);
+  assert.equal(parseStun(signed).attrs.get(0x0008).length, 20);
+  assert.throws(() => encodeXorAddress('2001:db8::1', 1));
+});
+
+test('relay policy: turn', async () => {
+  const { isTurnAllocate, turnHosts } = await import('../worker/policy.js');
+  const allocate = new Uint8Array([0, 3, 0, 8, 0x21, 0x12, 0xa4, 0x42, ...new Uint8Array(12), 0, 0x19, 0, 4, 17, 0, 0, 0]);
+  assert.ok(isTurnAllocate(allocate));
+  assert.ok(!isTurnAllocate(allocate.slice(0, 24)), 'truncated');
+  const binding = allocate.slice();
+  binding[1] = 1;
+  assert.ok(!isTurnAllocate(binding), 'a binding request is not an allocate');
+  assert.deepEqual([...turnHosts(undefined)], ['turn.cloudflare.com']);
+  assert.deepEqual([...turnHosts(' A.example , b.example ')], ['a.example', 'b.example']);
+});

@@ -24,6 +24,7 @@ This folder is separate from Sayl. Nothing in `backend/` or `frontend/` uses it.
 | `public/client/` | the BitTorrent client: peer protocol, metadata from magnets, PEX, HTTP trackers, piece picking, SHA-1 checks. Plain JS, runs in browsers and Node 22 |
 | `public/index.html` | a test page, served by the relay itself |
 | `cli/fetch.mjs` | the same client from the command line, for measuring |
+| `cli/turn-check.mjs` | checks that the DHT can be reached through the relay and TURN |
 | `test/` | unit tests, and an end-to-end test against a real qBittorrent |
 
 ## What's proven so far
@@ -85,9 +86,35 @@ Then look at the Cloudflare dashboard → **Workers & Pages → sayl-relay → M
 | `peersTried` is high but `peersHandshaken` is low | Many peers refuse unencrypted connections or are unreachable. Encryption (MSE) can be added to the client. |
 | Every test fails to connect | Cloudflare blocks this kind of traffic. The idea is dead; back to a VPS. |
 
+## The DHT, through TURN
+
+Workers have no UDP, so the DHT (which finds peers for bare magnets and niche torrents) needs a detour. TURN, a service made for video calls, relays UDP. The client reaches Cloudflare's TURN server through the relay over TCP and uses it to talk to the DHT:
+
+```
+browser ── relay (TCP) ── Cloudflare TURN ── UDP ──► DHT nodes
+```
+
+Cloudflare's TURN has 1,000 GB a month free; DHT lookups are a few KB each. Tested locally against coturn (a real TURN server), a DHT node and qBittorrent: lookup through the relay, then a full download from peers found only through the DHT.
+
+To test it for real:
+
+1. Cloudflare dashboard → **Realtime → TURN → Create** a TURN key. Note its **key ID** and **API token**. If it asks for a card, stop and tell me.
+2. Redeploy the relay so it allows TURN: `npx wrangler deploy`.
+3. Run:
+
+```sh
+TURN_KEY_ID=… TURN_API_TOKEN=…
+# a. Does Cloudflare's TURN reach the DHT at all? (from your Mac, no relay)
+node cli/turn-check.mjs --direct --turn-key-id $TURN_KEY_ID --turn-api-token $TURN_API_TOKEN
+# b. The real thing: through the relay, then a 20 MB download from DHT-only peers
+node cli/turn-check.mjs --relay $RELAY --token $TOKEN --turn-key-id $TURN_KEY_ID --turn-api-token $TURN_API_TOKEN
+```
+
+If **a** works and **b** can't connect, Workers aren't allowed to reach Cloudflare's own TURN servers; another TURN provider would then be needed.
+
 ## Known limits
 
-- **No DHT and no UDP trackers** (Workers have no UDP). A udp:// tracker is tried over HTTP on the same port, and opentrackr is always asked. Torrents whose peers are only reachable through DHT won't start.
+- **The DHT isn't in the downloader yet.** It works on its own (`cli/turn-check.mjs`) and will be wired in once the TURN test passes. Until then a udp:// tracker is tried over HTTP on the same port, and opentrackr is always asked.
 - **No uploading yet.** The client only downloads. Seeding would only work while the tab is open, and only to peers we connect to.
 - **No encryption (MSE) yet.** Peers that require it will refuse us.
 - **One file out.** Multi-file torrents are saved as one joined file. Splitting them is a Sayl-frontend job.
@@ -109,5 +136,5 @@ Peers see Cloudflare's addresses, not users'. Copyright complaints about what pe
 ```sh
 npm test                                    # unit tests
 npm install --no-save playwright-core@1.56.1   # optional, adds the browser check
-node test/local.mjs                         # end to end; needs Docker and linuxserver/qbittorrent:5.2.4
+node test/local.mjs                         # end to end; needs Docker and linuxserver/qbittorrent:5.2.4 (and coturn for the DHT part)
 ```

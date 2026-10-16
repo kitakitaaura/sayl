@@ -20,3 +20,5 @@ new_sqlite_classes = ["Session"]
 [vars]
 # "1" lets the relay reach private addresses. Only for local testing.
 ALLOW_PRIVATE_TARGETS = "0"
+# TURN servers the relay may reach (gives the browser UDP, for the DHT).
+TURN_HOSTS = "turn.cloudflare.com"

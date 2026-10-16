@@ -15,7 +15,7 @@
  */
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
-import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, parseTarget, startsWithBtHandshake } from './policy.js';
+import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
 
 export default {
   async fetch(request, env) {
@@ -55,11 +55,11 @@ function openTunnel(url, env) {
   server.accept();
   // Newer compatibility dates deliver binary messages as Blobs unless told otherwise.
   server.binaryType = 'arraybuffer';
-  relay(server, target);
+  relay(server, target, turnHosts(env.TURN_HOSTS).has(target.host));
   return new Response(null, { status: 101, webSocket: client });
 }
 
-function relay(ws, { host, port, tls }) {
+function relay(ws, { host, port, tls }, turnAllowed) {
   let socket;
   let closed = false;
   /** 'start' → first browser message decides: 'bt' (waiting for the remote handshake) or 'http'; then 'open'. */
@@ -103,6 +103,9 @@ function relay(ws, { host, port, tls }) {
         if (bytes.length > BT_HANDSHAKE_LENGTH) held.push(bytes.slice(BT_HANDSHAKE_LENGTH));
       } else if (isAnnounceRequest(bytes)) {
         mode = 'http';
+        write(bytes);
+      } else if (turnAllowed && isTurnAllocate(bytes)) {
+        mode = 'open';
         write(bytes);
       } else {
         close('only bittorrent connections and tracker announces are relayed');

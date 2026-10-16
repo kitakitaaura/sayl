@@ -1,12 +1,14 @@
 /**
  * What the relay agrees to carry. Pure functions, so they can be tested in Node.
  *
- * The relay is a TCP pipe for exactly two things:
+ * The relay is a TCP pipe for exactly three things:
  *   1. BitTorrent peer connections: the browser must open with a BitTorrent
  *      handshake and the remote must answer with one, before anything else
  *      is passed along.
  *   2. One HTTP(S) tracker announce: a single GET whose path contains
  *      "announce" and whose query has info_hash, and nothing after it.
+ *   3. TURN, only to the servers in TURN_HOSTS (Cloudflare's by default): it
+ *      gives the browser UDP for the DHT.
  * Anything else closes the tunnel, so it can't be used as an open proxy.
  */
 
@@ -31,6 +33,28 @@ export function isAnnounceRequest(bytes) {
   if (!ANNOUNCE_LINE.test(text)) return false;
   const end = text.indexOf('\r\n\r\n');
   return end !== -1 && end + 4 === text.length;
+}
+
+/**
+ * True when the bytes start with a STUN Allocate request (RFC 8656), the
+ * first thing a TURN client sends. Only allowed towards TURN_HOSTS.
+ */
+export function isTurnAllocate(bytes) {
+  if (bytes.length < 20) return false;
+  const type = (bytes[0] << 8) | bytes[1];
+  const length = (bytes[2] << 8) | bytes[3];
+  const cookie = ((bytes[4] << 24) | (bytes[5] << 16) | (bytes[6] << 8) | bytes[7]) >>> 0;
+  return type === 0x0003 && cookie === 0x2112a442 && length % 4 === 0 && 20 + length <= bytes.length;
+}
+
+/** The TURN servers the relay may connect to, from the TURN_HOSTS setting. */
+export function turnHosts(setting) {
+  return new Set(
+    (setting ?? 'turn.cloudflare.com')
+      .split(',')
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 export function latin1(bytes) {

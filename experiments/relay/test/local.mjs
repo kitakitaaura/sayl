@@ -14,13 +14,17 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encode } from '../public/client/bencode.js';
+import { decode, encode } from '../public/client/bencode.js';
+import { Dht } from '../public/client/dht.js';
 import { Download } from '../public/client/download.js';
-import { parseTorrentFile } from '../public/client/torrent.js';
+import { fromHex, parseTorrentFile } from '../public/client/torrent.js';
+import { TurnClient } from '../public/client/turn.js';
+import { openTunnel } from '../public/client/tunnel.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -115,7 +119,7 @@ try {
   check('qbittorrent is seeding the test file', true);
 
   // 4. The relay, running locally.
-  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1'], {
+  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1', '--var', 'TURN_HOSTS:127.0.0.1'], {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -197,6 +201,77 @@ try {
     const text = await page.textContent('#log');
     const pageSummary = safeJson(text.slice(text.indexOf('{')));
     check('the browser page downloads and verifies the whole torrent', pageSummary?.complete === true && pageSummary.verifiedBytes === SIZE, `${pageSummary?.averageMBps?.toFixed(1)} MB/s`);
+  }
+
+  // 9. The DHT over TURN, through the relay (skipped unless coturn is installed).
+  let hasCoturn = true;
+  try {
+    execFileSync('which', ['turnserver'], { stdio: 'ignore' });
+  } catch {
+    hasCoturn = false;
+  }
+  if (!hasCoturn) {
+    console.log('skip the DHT over TURN (install coturn to run it)');
+  } else {
+    // A fake DHT node that knows the seeder.
+    const node = createSocket('udp4');
+    let dhtQueries = 0;
+    node.on('message', (buf, from) => {
+      let q;
+      try {
+        q = decode(new Uint8Array(buf)).value;
+      } catch {
+        return;
+      }
+      dhtQueries++;
+      const r = { id: new Uint8Array(20).fill(7) };
+      if (new TextDecoder().decode(q.q) === 'get_peers') {
+        r.token = new TextEncoder().encode('tk');
+        r.values = [new Uint8Array([127, 0, 0, 1, QBIT_PORT >> 8, QBIT_PORT & 255])];
+      }
+      node.send(Buffer.from(encode({ t: q.t, y: 'r', r })), from.port, from.address);
+    });
+    await new Promise((r) => node.bind(0, '127.0.0.1', r));
+    cleanups.push(() => node.close());
+
+    const turnPort = 13478;
+    const turnUser = 'sayl';
+    const turnPass = randomBytes(8).toString('hex');
+    const coturn = spawn('turnserver', [
+      '-n', '--listening-ip', '127.0.0.1', '--relay-ip', '127.0.0.1', '--listening-port', String(turnPort),
+      '--lt-cred-mech', '--user', `${turnUser}:${turnPass}`, '--realm', 'sayl.test',
+      '--allow-loopback-peers', '--no-tls', '--no-dtls', '--no-cli', '--log-file', 'stdout', '--simple-log',
+    ], { stdio: 'ignore' });
+    cleanups.push(() => coturn.kill('SIGTERM'));
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const relay = { url: relayUrl, via: 'do', session: randomBytes(12).toString('base64url') };
+    const allocate = new Uint8Array([0, 3, 0, 8, 0x21, 0x12, 0xa4, 0x42, ...randomBytes(12), 0, 0x19, 0, 4, 17, 0, 0, 0]);
+    check(
+      'refuses TURN to a host outside TURN_HOSTS',
+      (await rawTunnel(relayUrl, { host: 'localhost', port: tracker.address().port }, [allocate])).error?.includes('only bittorrent'),
+    );
+    const stream = await openTunnel(relay, { host: '127.0.0.1', port: turnPort });
+    const turn = await TurnClient.connect(stream, { username: turnUser, password: turnPass });
+    check('TURN allocation through the relay', !!turn.relayed?.port, `udp ${turn.relayed?.host}:${turn.relayed?.port}`);
+    const dht = new Dht(turn);
+    const bootstrap = [{ host: '127.0.0.1', port: node.address().port }];
+    check('DHT ping through TURN', !!(await dht.ping(bootstrap[0])));
+    const found = await dht.getPeers(fromHex(torrent.infoHash), bootstrap);
+    check('DHT lookup through TURN finds the seeder', found.peers.some((p) => p.port === QBIT_PORT), `${found.peers.length} peers, ${dhtQueries} queries`);
+    turn.close();
+
+    const out = new Uint8Array(SIZE);
+    const d = new Download({
+      relay,
+      source: { infoHash: torrent.infoHash, trackers: [], peers: found.peers.map((p) => `${p.host}:${p.port}`) },
+      sink: { write: (offset, b) => out.set(b, offset) },
+      extraTrackers: false,
+    });
+    const timer = setTimeout(() => d.stop('time limit'), 120_000);
+    const s = await d.start();
+    clearTimeout(timer);
+    check('bare magnet + DHT only: complete and identical', s.complete && createHash('sha256').update(out).digest('hex') === payloadSha, `${s.averageMBps.toFixed(1)} MB/s`);
   }
 } catch (err) {
   check(`unexpected error: ${err.message}`, false);
