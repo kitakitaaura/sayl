@@ -8,13 +8,17 @@
  *                              relay, turns on its workers.dev address, gives
  *                              the sign-in back (revokes it), and sends the
  *                              browser home with the relay's address and token
+ *   GET /api/relay/check?url=…  whether a new relay answers yet, asked from
+ *                              Cloudflare's side so the visitor's browser doesn't
+ *                              try (and remember a failure for) an address that
+ *                              isn't live yet ({ "up": true })
  *
  * Nothing is stored: the sign-in lives only for the length of the callback.
  *
  * Secrets (wrangler secret put, or the dashboard):
  *   OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET   from Manage Account → OAuth clients
  *   SESSION_SECRET                         any long random string; signs the short-lived sign-in cookie
- * Optional: OAUTH_SCOPES, CF_AUTH_BASE and CF_API_BASE (for testing against a stand-in).
+ * Optional: OAUTH_SCOPES, CF_AUTH_BASE, CF_API_BASE and RELAY_CHECK_BASE (for testing against a stand-in).
  */
 import { RELAY } from './relay-source.js';
 
@@ -33,6 +37,7 @@ export default {
       }
       if (url.pathname === '/api/relay/connect') return await connect(url, env);
       if (url.pathname === '/api/relay/callback') return await callback(request, url, env);
+      if (url.pathname === '/api/relay/check') return await check(url, env);
       if (url.pathname.startsWith('/api/')) return Response.json({ error: 'not found' }, { status: 404 });
     } catch (err) {
       return home(url, { 'relay-error': err instanceof SetupError ? err.message : 'something went wrong setting up your relay. try again.' });
@@ -55,6 +60,23 @@ function home(url, values, extraHeaders = {}) {
     status: 302,
     headers: { location: `${url.origin}/#${fragment}`, 'cache-control': 'no-store', ...extraHeaders },
   });
+}
+
+/** Asks a newly installed relay for /health. Only relay addresses Sayl hands out, so it can't be used to fetch anything else. */
+async function check(url, env) {
+  const target = url.searchParams.get('url') ?? '';
+  const headers = { 'cache-control': 'no-store' };
+  if (!new RegExp(`^https://${RELAY.name}\\.[a-z0-9-]+\\.workers\\.dev$`).test(target)) {
+    return Response.json({ error: 'not a relay address' }, { status: 400, headers });
+  }
+  const base = (env.RELAY_CHECK_BASE || target).replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/health?t=${randomString(6)}`, { cache: 'no-store', redirect: 'manual', signal: AbortSignal.timeout(6000) });
+    const body = res.ok ? await res.json().catch(() => ({})) : {};
+    return Response.json({ up: body.status === 'ok' }, { headers });
+  } catch {
+    return Response.json({ up: false }, { headers });
+  }
 }
 
 // ── step 1: off to Cloudflare ─────────────────────────────────────────────

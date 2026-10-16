@@ -182,6 +182,7 @@ try {
       'dev', '--port', String(SITE_PORT), '--ip', '127.0.0.1',
       '--var', `OAUTH_CLIENT_ID:${CLIENT_ID}`, '--var', `OAUTH_CLIENT_SECRET:${CLIENT_SECRET}`, '--var', `SESSION_SECRET:${randomBytes(16).toString('hex')}`,
       '--var', `CF_AUTH_BASE:http://127.0.0.1:${FAKE_PORT}`, '--var', `CF_API_BASE:http://127.0.0.1:${FAKE_PORT}/client/v4`,
+      '--var', `RELAY_CHECK_BASE:http://127.0.0.1:${RELAY_PORT}`,
     ],
     { cwd: frontend, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' }, stdio: 'ignore' },
   );
@@ -194,6 +195,11 @@ try {
   // A callback without the sign-in cookie is turned away.
   const forged = await fetch(`${siteUrl}/api/relay/callback?code=x&state=y`, { redirect: 'manual' });
   const fragment = (location) => new URLSearchParams(new URL(location).hash.slice(1));
+  const checkStatus = async (u) => (await fetch(`${siteUrl}/api/relay/check?url=${encodeURIComponent(u)}`)).status;
+  check(
+    'the relay check only looks at relay addresses',
+    (await checkStatus('https://example.com')) === 400 && (await checkStatus('https://sayl-relay.x.workers.dev.example.com')) === 400 && (await checkStatus('https://sayl-relay.x.workers.dev')) === 200,
+  );
   check('a forged callback is refused', forged.status === 302 && (fragment(forged.headers.get('location')).get('relay-error') ?? '').includes('expired or came from somewhere else'));
 
   // ── a person clicking through ─────────────────────────────────────────────
@@ -202,9 +208,16 @@ try {
   cleanups.push(() => browser.close());
   const context = await browser.newContext();
   let relayProxyHits = 0;
+  // Like the bug seen on the real Cloudflare: the page that waits for the new relay can't reach it,
+  // though the relay is up and a reload reaches it fine.
+  let loads = 0;
+  let staleOnce = true;
+  let staleLoad = null;
   // The new relay's workers.dev address is answered by the uploaded relay, run locally (started below).
   await context.route(/^https:\/\/sayl-relay\.[a-z0-9-]+\.workers\.dev\//, async (route) => {
     relayProxyHits++;
+    if (staleOnce && staleLoad === null) staleLoad = loads;
+    if (staleOnce && loads === staleLoad) return route.abort();
     const u = new URL(route.request().url());
     try {
       const r = await fetch(`http://127.0.0.1:${RELAY_PORT}${u.pathname}${u.search}`);
@@ -216,6 +229,11 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('domcontentloaded', () => loads++);
+  let serverChecks = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/api/relay/check')) serverChecks++;
+  });
 
   await page.goto(siteUrl);
   await page.getByRole('button', { name: 'set up with cloudflare' }).waitFor({ timeout: 20_000 });
@@ -256,6 +274,7 @@ try {
   await until(async () => fake.uploads.length === 1, 30, 'the relay upload');
   startRelay();
   await until(async () => (await fetch(`http://127.0.0.1:${RELAY_PORT}/health`)).ok, 90, 'the uploaded relay to start');
+  const hitsBeforeUp = relayProxyHits;
   // ready = the relay is saved, it answered, and the add box is showing
   const ready = () =>
     page.waitForFunction(
@@ -266,6 +285,9 @@ try {
   await page.getByText('your relay is ready').waitFor({ timeout: 120_000 });
   await ready();
   check('after approving, the relay is installed and the site is ready', true, `${relayProxyHits} health checks`);
+  check('until the relay is up, only the website checks it, not the browser', hitsBeforeUp === 0 && serverChecks > 0, `${serverChecks} checks by the website`);
+  check('when the page itself can\'t reach the live relay, it reloads once by itself and carries on', staleLoad !== null && loads === staleLoad + 1, `${loads} page loads`);
+  staleOnce = false;
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('sayl.relay') ?? '{}'));
   const first = fake.uploads[0];

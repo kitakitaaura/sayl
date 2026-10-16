@@ -74,8 +74,9 @@ class App {
     });
     await this.engine.load();
     const installed = relayConfig.takeFromLocation();
-    this.status = relayConfig.ready && !installed ? 'ready' : 'setup';
-    if (installed) void this.waitForNewRelay();
+    const reloaded = !installed && relayConfig.takeReloadMark();
+    this.status = relayConfig.ready && !installed && !reloaded ? 'ready' : 'setup';
+    if (installed || reloaded) void this.waitForNewRelay(!reloaded);
     window.addEventListener('beforeunload', (e) => {
       // closing the tab stops the downloads; they pick up again on the next visit
       if (this.engine?.busy) e.preventDefault();
@@ -85,9 +86,11 @@ class App {
   }
 
   /** A relay was just installed for the visitor: wait until it answers, then get going. */
-  private async waitForNewRelay(): Promise<void> {
-    const up = await relayConfig.waitUntilUp();
-    if (up) {
+  private async waitForNewRelay(mayReload: boolean): Promise<void> {
+    const result = await relayConfig.waitUntilUp({ mayReload });
+    if (result === 'reload') {
+      relayConfig.reloadAndCheck();
+    } else if (result === 'up') {
       toasts.push('your relay is ready', 'ok');
       this.relaySaved();
     } else {

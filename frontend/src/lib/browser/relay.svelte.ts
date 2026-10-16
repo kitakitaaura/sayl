@@ -3,6 +3,8 @@ import { browser } from '$app/environment';
 import type { Relay } from '$bt';
 
 const KEY = 'sayl.relay';
+/** set in sessionStorage across a reload made to check a new relay */
+const CHECK_KEY = 'sayl.relay-check';
 
 function load(): { url: string; token: string } {
   if (!browser) return { url: '', token: '' };
@@ -85,23 +87,80 @@ class RelayConfig {
     return true;
   }
 
-  /** Waits for a newly installed relay to answer: a new workers.dev address can take a few minutes. */
-  async waitUntilUp(timeoutMs = 10 * 60_000): Promise<boolean> {
+  /**
+   * Waits for a newly installed relay to answer: a new workers.dev address can take a few minutes.
+   * Mostly asks the website to check from Cloudflare's side, because a browser that tries an address
+   * before it's live can keep failing on it until the page is reloaded.
+   *   'up'       this page reaches the relay
+   *   'reload'   Cloudflare reaches it but this page still can't; a fresh page load fixes that
+   *   'timeout'  nothing after timeoutMs
+   * With 'reload', `waiting` stays on: the caller reloads the page.
+   */
+  async waitUntilUp({ timeoutMs = 10 * 60_000, mayReload = true } = {}): Promise<'up' | 'reload' | 'timeout'> {
     this.waiting = true;
-    const end = Date.now() + timeoutMs;
+    const start = Date.now();
+    let upForCloudflare = 0;
     try {
-      while (Date.now() < end) {
-        try {
-          const res = await fetch(`${this.url}/health`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
-          if (res.ok) return true;
-        } catch {
-          // not up yet
+      for (let round = 0; Date.now() - start < timeoutMs; round++) {
+        const server = await this.checkFromServer();
+        // without the website's check (or if it can't see the relay), still try now and then
+        const anyway = server === null || (Date.now() - start > 45_000 && round % 3 === 0);
+        if (server === true || anyway) {
+          if (await this.answers()) return 'up';
+          // a few tries first: the address may need a moment more to reach this browser
+          if (server === true && ++upForCloudflare >= 3 && mayReload) {
+            upForCloudflare = -1;
+            return 'reload';
+          }
         }
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise((r) => setTimeout(r, 4000));
       }
-      return false;
+      return 'timeout';
     } finally {
-      this.waiting = false;
+      if (upForCloudflare !== -1) this.waiting = false;
+    }
+  }
+
+  /** The website's view of the relay: true or false, or null when the site can't check. */
+  private async checkFromServer(): Promise<boolean | null> {
+    try {
+      const res = await fetch(`/api/relay/check?url=${encodeURIComponent(this.url)}`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) return null;
+      const body = (await res.json()) as { up?: unknown };
+      return typeof body.up === 'boolean' ? body.up : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Whether this page reaches the relay itself. */
+  private async answers(): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.url}/health?t=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Reloads the page and checks the new relay again once it's back (without reloading a second time). */
+  reloadAndCheck(): void {
+    try {
+      sessionStorage.setItem(CHECK_KEY, '1');
+    } catch {
+      // without it the page just starts with the relay as it is
+    }
+    location.reload();
+  }
+
+  /** Whether the page was reloaded to check a new relay. Clears the mark. */
+  takeReloadMark(): boolean {
+    try {
+      const marked = sessionStorage.getItem(CHECK_KEY) === '1';
+      sessionStorage.removeItem(CHECK_KEY);
+      return marked && !!this.url;
+    } catch {
+      return false;
     }
   }
 

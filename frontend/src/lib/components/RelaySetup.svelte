@@ -60,6 +60,7 @@
     <span class="spinner" aria-hidden="true"></span>
     <span>your relay is installed. waiting for it to come online…</span>
     <small>a brand-new workers.dev address can take a few minutes. you can leave this page open.</small>
+    <button type="button" class="linkish small" onclick={() => relayConfig.reloadAndCheck()}>taking long? reload and check again</button>
   </div>
 {:else}
   {#if !compact}
