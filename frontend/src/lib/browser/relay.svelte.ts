@@ -30,6 +30,12 @@ export function normalizeRelayUrl(input: string): string | null {
 class RelayConfig {
   url = $state(load().url);
   token = $state(load().token);
+  /** whether this site can install a relay for the visitor (the website's Worker has an OAuth client); null until known */
+  available = $state<boolean | null>(null);
+  /** a relay that was just installed and isn't answering yet */
+  waiting = $state(false);
+  /** what went wrong with automatic setup, to show on the setup screen */
+  error = $state('');
 
   get ready(): boolean {
     return !!this.url;
@@ -37,6 +43,66 @@ class RelayConfig {
 
   relay(): Relay | null {
     return this.url ? { url: this.url, token: this.token || undefined } : null;
+  }
+
+  async checkAvailable(): Promise<void> {
+    if (this.available !== null) return;
+    try {
+      const res = await fetch('/api/relay/available', { cache: 'no-store' });
+      const body = (await res.json()) as { available?: unknown };
+      this.available = res.ok && body.available === true;
+    } catch {
+      this.available = false; // a static host without the Worker, or the server version
+    }
+  }
+
+  /** Starts automatic setup: off to Cloudflare to approve, then back here. */
+  connect(): void {
+    location.href = '/api/relay/connect';
+  }
+
+  /**
+   * Picks up the result of automatic setup from the address bar (#relay-url=…&relay-token=…
+   * or #relay-error=…) and removes it. Returns true when a relay was handed over.
+   */
+  takeFromLocation(): boolean {
+    if (!location.hash.includes('relay-')) return false;
+    const params = new URLSearchParams(location.hash.slice(1));
+    history.replaceState(null, '', location.pathname + location.search);
+    const err = params.get('relay-error');
+    if (err) {
+      this.error = err;
+      return false;
+    }
+    const url = normalizeRelayUrl(params.get('relay-url') ?? '');
+    const token = params.get('relay-token') ?? '';
+    if (!url || !/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(url)) {
+      this.error = 'the relay setup came back incomplete. try again.';
+      return false;
+    }
+    this.save(url, token);
+    this.error = '';
+    return true;
+  }
+
+  /** Waits for a newly installed relay to answer: a new workers.dev address can take a few minutes. */
+  async waitUntilUp(timeoutMs = 10 * 60_000): Promise<boolean> {
+    this.waiting = true;
+    const end = Date.now() + timeoutMs;
+    try {
+      while (Date.now() < end) {
+        try {
+          const res = await fetch(`${this.url}/health`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+          if (res.ok) return true;
+        } catch {
+          // not up yet
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      return false;
+    } finally {
+      this.waiting = false;
+    }
   }
 
   save(url: string, token: string): void {

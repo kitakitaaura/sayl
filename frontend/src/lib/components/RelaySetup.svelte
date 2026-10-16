@@ -4,8 +4,10 @@
    * BitTorrent connections. Shown on the home page until one is set, and in settings.
    */
   import ArrowRight from '@lucide/svelte/icons/arrow-right';
+  import Cloud from '@lucide/svelte/icons/cloud';
   import Link from '@lucide/svelte/icons/link';
   import KeyRound from '@lucide/svelte/icons/key-round';
+  import { onMount } from 'svelte';
   import { APP_NAME } from '$lib/config';
   import { normalizeRelayUrl, relayConfig } from '$lib/browser/relay.svelte';
   import { app } from '$lib/state/app.svelte';
@@ -40,6 +42,11 @@
     toasts.push(r.dht ? 'relay connected' : 'relay connected. it has no TURN login, so torrents found only through the DHT won’t start.', r.dht ? 'ok' : 'info');
   }
 
+  onMount(() => void relayConfig.checkAvailable());
+
+  let showManual = $state(false);
+  const manual = $derived(relayConfig.available === false || showManual || (compact && relayConfig.ready));
+
   function forget() {
     relayConfig.save('', '');
     url = '';
@@ -48,32 +55,59 @@
   }
 </script>
 
-{#if !compact}
-  <p class="note">
-    {name} runs torrents right here in your browser. it needs a <b>relay</b>: a small free program on your own cloudflare account that connects
-    your browser to other peers. paste its address below.
-  </p>
-{/if}
-
-<form class="box" onsubmit={submit} aria-label="relay">
-  <div class="omni">
-    <Link class="lead" size={18} aria-hidden="true" />
-    <label class="sr" for="relay-url">relay address</label>
-    <input id="relay-url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://sayl-relay.you.workers.dev" bind:value={url} />
+{#if relayConfig.waiting}
+  <div class="waiting" role="status">
+    <span class="spinner" aria-hidden="true"></span>
+    <span>your relay is installed. waiting for it to come online…</span>
+    <small>a brand-new workers.dev address can take a few minutes. you can leave this page open.</small>
   </div>
-  <div class="omni">
-    <KeyRound class="lead" size={18} aria-hidden="true" />
-    <label class="sr" for="relay-token">relay token</label>
-    <input id="relay-token" type="password" autocomplete="off" placeholder="token (if your relay has one)" bind:value={token} />
-    <button type="submit" class="go" aria-label="save relay" disabled={busy}><ArrowRight size={18} aria-hidden="true" /></button>
-  </div>
-</form>
+{:else}
+  {#if !compact}
+    <p class="note">
+      {name} runs torrents right here in your browser. it needs a <b>relay</b>: a small free program on your own cloudflare account that
+      connects your browser to other peers.
+    </p>
+  {/if}
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
-{#if compact && relayConfig.ready}
-  <p class="hint">using <span class="mono">{relayConfig.url}</span> · <button type="button" class="linkish" onclick={forget}>forget it</button></p>
-{:else if !compact}
-  <p class="hint">no relay yet? the setup guide is in the project’s <span class="mono">relay/README.md</span>. it takes about five minutes and is free.</p>
+  {#if relayConfig.error}<p class="error" role="alert">{relayConfig.error}</p>{/if}
+
+  {#if relayConfig.available}
+    <button type="button" class="btn primary wide" onclick={() => relayConfig.connect()}>
+      <Cloud size={16} aria-hidden="true" />{compact && relayConfig.ready ? 'set up again with cloudflare' : 'set up with cloudflare'}
+    </button>
+    {#if !compact}
+      <p class="hint">
+        free, no card. you sign in to cloudflare (or make an account) and approve {name}. it installs the relay on your account, then lets go of the
+        access.
+      </p>
+    {/if}
+    {#if !manual}
+      <button type="button" class="linkish small" onclick={() => (showManual = true)}>or use a relay you set up yourself</button>
+    {/if}
+  {/if}
+
+  {#if manual}
+    <form class="box" onsubmit={submit} aria-label="relay">
+      <div class="omni">
+        <Link class="lead" size={18} aria-hidden="true" />
+        <label class="sr" for="relay-url">relay address</label>
+        <input id="relay-url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://sayl-relay.you.workers.dev" bind:value={url} />
+      </div>
+      <div class="omni">
+        <KeyRound class="lead" size={18} aria-hidden="true" />
+        <label class="sr" for="relay-token">relay token</label>
+        <input id="relay-token" type="password" autocomplete="off" placeholder="token (if your relay has one)" bind:value={token} />
+        <button type="submit" class="go" aria-label="save relay" disabled={busy}><ArrowRight size={18} aria-hidden="true" /></button>
+      </div>
+    </form>
+
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if compact && relayConfig.ready}
+      <p class="hint">using <span class="mono">{relayConfig.url}</span> · <button type="button" class="linkish" onclick={forget}>forget it</button></p>
+    {:else if !compact && !relayConfig.available}
+      <p class="hint">no relay yet? the setup guide is in the project’s <span class="mono">relay/README.md</span>. it takes about five minutes and is free.</p>
+    {/if}
+  {/if}
 {/if}
 
 <style>
@@ -154,6 +188,38 @@
   .mono {
     font-family: var(--mono);
     color: var(--fg-2);
+  }
+  .wide {
+    width: 100%;
+    justify-content: center;
+  }
+  .small {
+    align-self: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .waiting {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 8px;
+    color: var(--fg-2);
+    font-size: 12.5px;
+    text-align: center;
+  }
+  .waiting small {
+    max-width: 40ch;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
   }
   .linkish {
     padding: 0;

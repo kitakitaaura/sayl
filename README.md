@@ -43,7 +43,29 @@ Finding peers, in order: the torrent's own trackers and about 25 public HTTP tra
 
    A site built with `API_URL` set uses the server version unless `ENGINE=browser`.
 
-2. **A relay.** Each person sets up their own, following [relay/README.md](relay/README.md) (about five minutes, free). The site asks for its address on the first visit.
+2. **"Set up with cloudflare"** (optional, but it's how most people will get a relay). The website's Worker can install a relay into each visitor's own Cloudflare account after they approve it. That needs a Cloudflare OAuth client for Sayl:
+
+   1. In the Cloudflare dashboard: **Manage Account → OAuth clients → Create client**.
+      - Name `Sayl`; response type `code`; grant type `authorization_code`; token authentication method `client_secret_basic`.
+      - Redirect URL: `https://sayl.kitaaura.com/api/relay/callback`.
+      - Client URL: `https://sayl.kitaaura.com`. Add a logo.
+      - Scopes, both required: **Account Settings Read** (`account-settings.read`) and **Workers Scripts Write** (`workers-scripts.write`).
+   2. Copy the **client ID** and **client secret** (the secret is shown once).
+   3. Give them to the website's Worker as secrets, in `frontend/` (or in the dashboard under the Worker's *Settings → Variables and Secrets*, type *Secret*):
+
+      ```sh
+      npx wrangler secret put OAUTH_CLIENT_ID
+      npx wrangler secret put OAUTH_CLIENT_SECRET
+      npx wrangler secret put SESSION_SECRET      # any long random string: openssl rand -hex 32
+      ```
+
+   4. A new client is **private**: only members of your Cloudflare account can use it, which is right for testing. To open it to everyone, verify the client URL's domain (Cloudflare gives you a `TXT` record to add to `kitaaura.com`), then **Change Visibility → public**. That can't be undone.
+
+   Without these secrets the site still works; it just asks people to paste a relay they set up themselves ([relay/README.md](relay/README.md)).
+
+   If Cloudflare rejects the scope names, set `OAUTH_SCOPES` (a plain variable, space-separated) to the IDs your client shows.
+
+How "set up with cloudflare" works: the visitor approves Sayl on Cloudflare's own page; the website's Worker (`frontend/worker/index.js`) uploads `sayl-relay` to their account with a new random token, turns on its `workers.dev` address (registering one for the account if it has none), revokes the sign-in, and sends the browser home with the relay's address and token. Nothing is stored on Sayl's side. Setting up again from another device reuses the same relay and token.
 
 Downloads stay in the visitor's browser storage until they remove them. Chrome and Edge give a site up to about 60% of the free disk; Firefox and Safari give less.
 
@@ -60,7 +82,7 @@ Open the site and enter `http://localhost:8787` as the relay.
 
 | Path | What it is |
 |---|---|
-| `frontend/` | The SvelteKit website, for Cloudflare Pages. `src/lib/browser/` is the browser engine. |
+| `frontend/` | The SvelteKit website. `src/lib/browser/` is the browser engine; `worker/` is the website's Worker, which installs relays. |
 | `client/` | The BitTorrent client the website runs: peer protocol, metadata from magnets, PEX, HTTP trackers, the DHT over TURN, piece picking and checks. Plain JS, also runs in Node. |
 | `relay/` | The relay Worker, its command-line tools, and the end-to-end tests. |
 | `brand.json` | The product name. Change it here (or set `APP_NAME`) to rename everything. |
@@ -215,6 +237,7 @@ cd client && npm test                      # bencode, magnets, trackers, piece-t
 cd relay && npm test                       # what the relay agrees to carry
 cd relay && node test/local.mjs            # relay + client against a real qBittorrent (Docker)
 cd relay && node test/website.mjs          # the website in browser mode, clicked through in Chromium
+cd relay && node test/setup.mjs            # "set up with cloudflare", against a stand-in for Cloudflare's sign-in and API
 cd backend && npm install && npm test      # the server version
 ```
 

@@ -73,13 +73,26 @@ class App {
       void this.runPending();
     });
     await this.engine.load();
-    this.status = relayConfig.ready ? 'ready' : 'setup';
+    const installed = relayConfig.takeFromLocation();
+    this.status = relayConfig.ready && !installed ? 'ready' : 'setup';
+    if (installed) void this.waitForNewRelay();
     window.addEventListener('beforeunload', (e) => {
       // closing the tab stops the downloads; they pick up again on the next visit
       if (this.engine?.busy) e.preventDefault();
     });
     // progress is saved every few seconds; save the last bit too
     window.addEventListener('pagehide', () => this.engine?.flush());
+  }
+
+  /** A relay was just installed for the visitor: wait until it answers, then get going. */
+  private async waitForNewRelay(): Promise<void> {
+    const up = await relayConfig.waitUntilUp();
+    if (up) {
+      toasts.push('your relay is ready', 'ok');
+      this.relaySaved();
+    } else {
+      relayConfig.error = "your relay was installed but isn't answering yet. new workers.dev addresses can take a while; reload this page in a few minutes.";
+    }
   }
 
   /** The relay settings changed (browser engine). */

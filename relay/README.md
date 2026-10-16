@@ -13,7 +13,11 @@ browser (Sayl, in the page)          Cloudflare (free plan)                swarm
 
 Each person runs their own relay on their own free Cloudflare account. Their traffic goes through their account, not Sayl's.
 
-## Set one up (about 5 minutes, free, no card)
+## Set one up
+
+The easy way: on the Sayl website, press **set up with cloudflare** and approve it. Sayl installs this relay on your account and fills in its address and token for you.
+
+### By hand (about 5 minutes, free, no card)
 
 You need Node.js 22 and a free Cloudflare account. In this folder:
 
@@ -104,6 +108,7 @@ npm test                                         # what the relay agrees to carr
 npm install --no-save playwright-core@1.56.1     # for the website test
 node test/local.mjs      # relay + client against a real qBittorrent (Docker), with coturn for the DHT if installed
 node test/website.mjs    # the Sayl website in browser mode, in Chromium, against the same setup
+node test/setup.mjs      # "set up with cloudflare": sign-in, upload, workers.dev, against a stand-in Cloudflare
 ```
 
 `local.mjs` downloads through the relay in every mode and checks: refusals, file choice, sequential order, resuming, the DHT as the last resort, and a refused TURN login. `website.mjs` goes through the site like a person: set the relay, add a magnet and a `.torrent`, pick files, save them and compare them byte for byte, recheck, pause and resume, reload mid-download, and remove.

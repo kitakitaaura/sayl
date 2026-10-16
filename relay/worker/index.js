@@ -15,8 +15,8 @@
  *
  * via=worker (default) relays inside the Worker request itself. via=do hands
  * the WebSocket to a Durable Object chosen by `session`, so one browser
- * download shares one object. Which of the two holds up on the free plan is
- * what this experiment is measuring.
+ * download shares one object. Sayl uses via=do: Durable Objects get far more
+ * CPU time per message than a plain Worker request on the free plan.
  */
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
