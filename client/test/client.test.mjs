@@ -119,3 +119,46 @@ test('pieces map onto files that sit end to end', async () => {
   assert.deepEqual(safePathParts('x:y?.txt'), ['x_y_.txt']);
   assert.deepEqual(safePathParts('..'), ['file']);
 });
+
+test("TURN logins come from the relay, or from the website when the relay has none", async () => {
+  const { fetchTurnServers, TurnError } = await import('../turn.js');
+  const login = (url) => ({ url, username: 'u', credential: 'p' });
+  const answers = new Map();
+  const asked = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    asked.push(u);
+    const [status, body] = answers.get(new URL(u).origin + new URL(u).pathname) ?? [404, {}];
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  };
+  const relay = { url: 'https://relay.test', token: 't' };
+  const opts = { fallback: 'https://site.test/api/turn' };
+  try {
+    answers.set('https://relay.test/turn-credentials', [200, { servers: [login('turn:own.test:80?transport=tcp'), login('turns:own.test:443?transport=tcp')] }]);
+    answers.set('https://site.test/api/turn', [200, { servers: [login('turns:site.test:443?transport=tcp')] }]);
+    let s = await fetchTurnServers(relay, opts);
+    assert.equal(s[0].url, 'turns:own.test:443?transport=tcp', "the relay's own login comes first, TLS on 443 first");
+    assert.equal(asked.length, 1, 'the website is not asked when the relay has a login');
+    assert.equal(new URL(asked[0]).searchParams.get('token'), 't');
+
+    answers.set('https://relay.test/turn-credentials', [200, { servers: [], error: 'the DHT is not set up here' }]);
+    s = await fetchTurnServers(relay, opts);
+    assert.deepEqual(s.map((x) => x.url), ['turns:site.test:443?transport=tcp'], "the website's login when the relay has none");
+
+    answers.set('https://relay.test/turn-credentials', [404, {}]); // an older relay without /turn-credentials
+    assert.equal((await fetchTurnServers(relay, opts))[0].url, 'turns:site.test:443?transport=tcp');
+
+    answers.set('https://relay.test/turn-credentials', [403, { error: 'bad token' }]);
+    await assert.rejects(fetchTurnServers(relay, opts), (e) => e instanceof TurnError && e.code === 403, 'a refused token is not papered over');
+
+    answers.set('https://relay.test/turn-credentials', [200, { servers: [] }]);
+    answers.set('https://site.test/api/turn', [503, { servers: [], error: 'the TURN provider refused (402)' }]);
+    await assert.rejects(fetchTurnServers(relay, opts), (e) => e.code === 'off' && /refused/.test(e.message), 'neither: off, so the DHT rests');
+    answers.delete('https://site.test/api/turn'); // a site without the Worker
+    await assert.rejects(fetchTurnServers(relay, opts), (e) => e.code === 'off');
+    await assert.rejects(fetchTurnServers(relay), (e) => e.code === 'off', 'no fallback: as before');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

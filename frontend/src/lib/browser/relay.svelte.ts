@@ -34,6 +34,8 @@ class RelayConfig {
   token = $state(load().token);
   /** whether this site can install a relay for the visitor (the website's Worker has an OAuth client); null until known */
   available = $state<boolean | null>(null);
+  /** whether this site hands out TURN logins for the DHT, for relays without their own */
+  siteDht = $state(false);
   /** a relay that was just installed and isn't answering yet */
   waiting = $state(false);
   /** what went wrong with automatic setup, to show on the setup screen */
@@ -51,8 +53,9 @@ class RelayConfig {
     if (this.available !== null) return;
     try {
       const res = await fetch('/api/relay/available', { cache: 'no-store' });
-      const body = (await res.json()) as { available?: unknown };
+      const body = (await res.json()) as { available?: unknown; dht?: unknown };
       this.available = res.ok && body.available === true;
+      this.siteDht = res.ok && body.dht === true;
     } catch {
       this.available = false; // a static host without the Worker, or the server version
     }
@@ -176,7 +179,7 @@ class RelayConfig {
 
   /**
    * Checks a relay before saving it. Returns null when it works, otherwise what's wrong.
-   * `dht` says whether the relay can also hand out TURN logins for the DHT.
+   * `dht` says whether the DHT will work: the relay has a TURN login, or this site hands them out.
    */
   async test(url: string, token: string): Promise<{ error: string | null; dht: boolean }> {
     try {
@@ -190,9 +193,9 @@ class RelayConfig {
       const turn = await fetch(`${url}/turn-credentials${q}`, { signal: AbortSignal.timeout(8000) });
       if (turn.status === 403) return { error: 'the relay refused that token.', dht: false };
       const body = (await turn.json().catch(() => ({}))) as { servers?: unknown[] };
-      return { error: null, dht: turn.ok && Array.isArray(body.servers) && body.servers.length > 0 };
+      return { error: null, dht: (turn.ok && Array.isArray(body.servers) && body.servers.length > 0) || this.siteDht };
     } catch {
-      return { error: null, dht: false };
+      return { error: null, dht: this.siteDht };
     }
   }
 }

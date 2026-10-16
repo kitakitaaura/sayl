@@ -11,7 +11,7 @@
  *   GET /turn-credentials[?token=<t>]
  *
  * Gives the browser a short-lived TURN login so it can reach the DHT (see
- * turnCredentials below). No TURN account set up: an empty list and the reason.
+ * turn-login.js). No TURN account set up: an empty list and the reason.
  *
  * via=worker (default) relays inside the Worker request itself. via=do hands
  * the WebSocket to a Durable Object chosen by `session`, so one browser
@@ -20,6 +20,7 @@
  */
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
+import { turnLogins } from './turn-login.js';
 import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, isTurnHost, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
 
 export default {
@@ -48,49 +49,15 @@ export class Session extends DurableObject {
   }
 }
 
-/**
- * TURN logins for the DHT, from the operator's TURN account, set with secrets:
- *   Metered (logins made on demand, expire after 2 hours):
- *     METERED_APP          the app name (the part before .metered.live)
- *     METERED_SECRET_KEY   the secret key
- *     METERED_TURN_HOST    optional, default standard.relay.metered.ca
- *   or a fixed login from any provider:
- *     TURN_URLS            comma-separated, e.g. turns:host:443?transport=tcp
- *     TURN_USERNAME, TURN_CREDENTIAL
- */
-let meteredCache = null; // { servers, expiresAt }, shared by requests on this isolate
-
 /** The Sayl website runs on another origin; it reads /health and /turn-credentials with the token. */
 const CORS = { 'access-control-allow-origin': '*' };
 
+/** A TURN login for the DHT, from this relay's own TURN account (see turn-login.js). */
 async function turnCredentials(url, env) {
   const json = (body, status = 200) => Response.json(body, { status, headers: { ...CORS, 'cache-control': 'no-store' } });
   if (env.ACCESS_TOKEN && url.searchParams.get('token') !== env.ACCESS_TOKEN) return json({ error: 'bad token' }, 403);
-  if (env.METERED_APP && env.METERED_SECRET_KEY) {
-    if (meteredCache && meteredCache.expiresAt - Date.now() > 15 * 60_000) return json({ servers: meteredCache.servers });
-    const ttl = 2 * 60 * 60;
-    let res;
-    try {
-      res = await fetch(`https://${env.METERED_APP}.metered.live/api/v1/turn/credential?secretKey=${encodeURIComponent(env.METERED_SECRET_KEY)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ expiryInSeconds: ttl, label: 'sayl-dht' }),
-      });
-    } catch (err) {
-      return json({ error: `the TURN provider is unreachable: ${err.message}` }, 503);
-    }
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok || !body.username || !body.password) return json({ error: `the TURN provider refused (${res.status}${body.message ? `: ${body.message}` : ''})` }, 503);
-    const host = env.METERED_TURN_HOST || 'standard.relay.metered.ca';
-    const servers = [`turns:${host}:443?transport=tcp`, `turn:${host}:80?transport=tcp`].map((u) => ({ url: u, username: body.username, credential: body.password }));
-    meteredCache = { servers, expiresAt: Date.now() + ttl * 1000 };
-    return json({ servers });
-  }
-  if (env.TURN_URLS && env.TURN_USERNAME && env.TURN_CREDENTIAL) {
-    const servers = env.TURN_URLS.split(',').map((u) => ({ url: u.trim(), username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL }));
-    return json({ servers });
-  }
-  return json({ servers: [], error: 'the DHT is not set up on this relay' });
+  const { status, body } = await turnLogins(env);
+  return json(body, status);
 }
 
 function checkRequest(request, url, env) {

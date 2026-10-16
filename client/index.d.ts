@@ -109,7 +109,8 @@ export function hex(bytes: Uint8Array): string;
 export function fromHex(s: string): Uint8Array;
 export function sha1(bytes: Uint8Array): Promise<Uint8Array>;
 export function equalBytes(a: Uint8Array, b: Uint8Array): boolean;
-export function fetchTurnServers(relay: Relay): Promise<TurnServer[]>;
+/** TURN logins from the relay, or from `fallback` (e.g. the website's /api/turn) when the relay has none. */
+export function fetchTurnServers(relay: Relay, options?: { fallback?: string }): Promise<TurnServer[]>;
 export function pieceSegments(info: Info, piece: number): { file: number; fileOffset: number; pieceOffset: number; length: number }[];
 export function piecesForFiles(info: Info, fileIndexes: Iterable<number>): Uint8Array;
 export function fileProgress(info: Info, have: Uint8Array): number[];

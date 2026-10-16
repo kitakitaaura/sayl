@@ -48,23 +48,38 @@ export function parseTurnUrl(url) {
 }
 
 /**
- * Asks the relay for short-lived TURN logins (it holds the operator's TURN
- * account). Returns [{ url, username, credential }], TLS on 443 first.
+ * Gets short-lived TURN logins for the DHT. Returns [{ url, username, credential }], TLS on 443 first.
+ * Asks the relay first (it may hold its owner's TURN account); when it has none, asks `fallback`
+ * (a URL that answers the same way, such as the Sayl website's /api/turn).
  */
-export async function fetchTurnServers(relay) {
+export async function fetchTurnServers(relay, { fallback } = {}) {
   const u = new URL('/turn-credentials', relay.url);
   if (relay.token) u.searchParams.set('token', relay.token);
+  try {
+    return await turnServersFrom(u);
+  } catch (err) {
+    // a refused token is the relay's problem; no TURN login fixes that
+    if (!fallback || err.code === 403) throw err;
+    try {
+      return await turnServersFrom(new URL(fallback, globalThis.location?.href));
+    } catch (err2) {
+      throw new TurnError(`${err.message}; ${err2.message}`, err.code === 'off' || err2.code === 'off' ? 'off' : err.code);
+    }
+  }
+}
+
+async function turnServersFrom(url) {
   let res;
   try {
-    res = await fetch(u, { signal: AbortSignal.timeout(10_000) });
+    res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   } catch (err) {
     throw new TurnError(`couldn't get TURN logins: ${err.message}`);
   }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new TurnError(body.error ?? `couldn't get TURN logins (${res.status})`, res.status === 503 ? 'off' : res.status);
   const rank = (s) => (/^turns:.*:443\b/.test(s.url) ? 0 : /^turns:/.test(s.url) ? 1 : 2);
-  const servers = (body.servers ?? []).filter((s) => parseTurnUrl(s.url)).sort((a, b) => rank(a) - rank(b));
-  if (!servers.length) throw new TurnError(body.error ?? 'the relay has no TURN server', 'off');
+  const servers = (body.servers ?? []).filter((s) => typeof s?.url === 'string' && parseTurnUrl(s.url)).sort((a, b) => rank(a) - rank(b));
+  if (!servers.length) throw new TurnError(body.error ?? 'no TURN server is set up', 'off');
   return servers;
 }
 

@@ -2,7 +2,8 @@
  * The website's Worker. It serves the built site (static assets) and, under
  * /api/relay, installs a visitor's relay into their own Cloudflare account:
  *
- *   GET /api/relay/available   whether this site can do that ({ "available": true })
+ *   GET /api/relay/available   whether this site can do that, and whether it hands
+ *                              out TURN logins ({ "available": true, "dht": true })
  *   GET /api/relay/connect     sends the visitor to Cloudflare to approve Sayl
  *   GET /api/relay/callback    Cloudflare sends them back here; Sayl uploads the
  *                              relay, turns on its workers.dev address, gives
@@ -13,13 +14,20 @@
  *                              try (and remember a failure for) an address that
  *                              isn't live yet ({ "up": true })
  *
+ *   GET /api/turn              a TURN login for the DHT from the site's own TURN
+ *                              account, for relays that have none of their own
+ *
  * Nothing is stored: the sign-in lives only for the length of the callback.
  *
  * Secrets (wrangler secret put, or the dashboard):
  *   OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET   from Manage Account → OAuth clients
  *   SESSION_SECRET                         any long random string; signs the short-lived sign-in cookie
- * Optional: OAUTH_SCOPES, CF_AUTH_BASE, CF_API_BASE and RELAY_CHECK_BASE (for testing against a stand-in).
+ * For the DHT (optional, as for the relay): METERED_APP and METERED_SECRET_KEY,
+ *   or TURN_URLS, TURN_USERNAME and TURN_CREDENTIAL. The TURN server must be one
+ *   the relay may reach (TURN_HOSTS in relay/wrangler.toml).
+ * Optional: OAUTH_SCOPES, CF_AUTH_BASE, CF_API_BASE, RELAY_CHECK_BASE and METERED_API_BASE (for testing against a stand-in).
  */
+import { hasTurnLogins, turnLogins } from '../../relay/worker/turn-login.js';
 import { RELAY } from './relay-source.js';
 
 // Cloudflare's names for "Account Settings: Read" and "Workers: Admin" (creating a Worker needs Admin) and "Edit"
@@ -33,7 +41,12 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/api/relay/available') {
-        return Response.json({ available: configured(env) }, { headers: { 'cache-control': 'no-store' } });
+        return Response.json({ available: configured(env), dht: hasTurnLogins(env) }, { headers: { 'cache-control': 'no-store' } });
+      }
+      if (url.pathname === '/api/turn') {
+        // same-origin only: no CORS headers, so other sites' pages can't read it
+        const { status, body } = await turnLogins(env);
+        return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
       }
       if (url.pathname === '/api/relay/connect') return await connect(url, env);
       if (url.pathname === '/api/relay/callback') return await callback(request, url, env);

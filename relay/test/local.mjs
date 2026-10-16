@@ -25,6 +25,7 @@ import { Download } from '../../client/download.js';
 import { fromHex, parseTorrentFile } from '../../client/torrent.js';
 import { TurnClient, fetchTurnServers } from '../../client/turn.js';
 import { openTunnel } from '../../client/tunnel.js';
+import { turnLogins } from '../worker/turn-login.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -311,6 +312,32 @@ try {
       'bare magnet, no trackers: the DHT is the last resort and the file arrives intact',
       bare.ok && /^found [1-9]/.test(bare.summary.dht) && bare.summary.peersFrom.dht >= 1 && dhtQueries > queriesBefore,
       `${bare.summary.dht}, ${bare.summary.averageMBps.toFixed(1)} MB/s`,
+    );
+
+    // A relay with no TURN login of its own, like one made by "set up with cloudflare": the login comes from the
+    // website's /api/turn instead (served here by the same code the website's Worker runs).
+    let siteTurnHits = 0;
+    const standIn = createServer(async (req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url.startsWith('/turn-credentials')) return res.end(JSON.stringify({ servers: [], error: 'the DHT is not set up here' }));
+      if (req.url === '/api/turn') {
+        siteTurnHits++;
+        const { status, body } = await turnLogins({ TURN_URLS: `turn:127.0.0.1:${turnPort}?transport=tcp`, TURN_USERNAME: turnUser, TURN_CREDENTIAL: turnPass });
+        res.statusCode = status;
+        return res.end(JSON.stringify(body));
+      }
+      res.statusCode = 404;
+      res.end('{}');
+    });
+    await new Promise((r) => standIn.listen(0, '127.0.0.1', r));
+    cleanups.push(() => standIn.close());
+    const standInUrl = `http://127.0.0.1:${standIn.address().port}`;
+    const siteDht = { getTurn: () => fetchTurnServers({ url: standInUrl, token: relay.token }, { fallback: `${standInUrl}/api/turn` }), bootstrap };
+    const viaSite = await run('site-turn', { infoHash: torrent.infoHash, trackers: [], peers: [] }, siteDht);
+    check(
+      "a relay without a TURN login: the DHT uses the website's login and the file arrives intact",
+      viaSite.ok && /^found [1-9]/.test(viaSite.summary.dht) && siteTurnHits >= 1,
+      `${viaSite.summary.dht}, ${siteTurnHits} logins from the website`,
     );
 
     // Last, because a refused login switches the DHT off for this process for an hour.

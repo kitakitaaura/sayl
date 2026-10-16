@@ -277,7 +277,8 @@ export class BrowserEngine {
       have: item.have,
       sequential: rec.sequential,
       maxPeers: 30,
-      dht: { getTurn: () => fetchTurnServers(relay) },
+      // the relay's own TURN login if it has one, otherwise this website's
+      dht: { getTurn: () => fetchTurnServers(relay, { fallback: '/api/turn' }) },
     });
     item.dl = d;
     item.dlStartedAt = Date.now();

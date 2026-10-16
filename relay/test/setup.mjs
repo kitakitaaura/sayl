@@ -56,6 +56,7 @@ const fake = {
   enabled: [],
   deletedSecrets: [],
   apiCalls: [],
+  meteredLogins: 0,
 };
 const json = (res, status, body) => {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -73,6 +74,12 @@ const readBody = (req) =>
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${FAKE_PORT}`);
   const body = await readBody(req);
+  // the stand-in for Metered's API, which makes TURN logins for the website to hand out
+  if (req.method === 'POST' && url.pathname === '/api/v1/turn/credential') {
+    if (url.searchParams.get('secretKey') !== 'metered-key') return json(res, 401, { message: 'bad key' });
+    fake.meteredLogins++;
+    return json(res, 200, { username: `metered-user-${fake.meteredLogins}`, password: 'metered-pass', expiryInSeconds: JSON.parse(body.toString()).expiryInSeconds });
+  }
   if (url.pathname === '/oauth2/auth') {
     const p = url.searchParams;
     const redirect = p.get('redirect_uri');
@@ -183,13 +190,28 @@ try {
       '--var', `OAUTH_CLIENT_ID:${CLIENT_ID}`, '--var', `OAUTH_CLIENT_SECRET:${CLIENT_SECRET}`, '--var', `SESSION_SECRET:${randomBytes(16).toString('hex')}`,
       '--var', `CF_AUTH_BASE:http://127.0.0.1:${FAKE_PORT}`, '--var', `CF_API_BASE:http://127.0.0.1:${FAKE_PORT}/client/v4`,
       '--var', `RELAY_CHECK_BASE:http://127.0.0.1:${RELAY_PORT}`,
+      '--var', 'METERED_APP:sayltest', '--var', 'METERED_SECRET_KEY:metered-key', '--var', `METERED_API_BASE:http://127.0.0.1:${FAKE_PORT}`,
     ],
     { cwd: frontend, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' }, stdio: 'ignore' },
   );
   cleanups.push(() => site.kill('SIGTERM'));
   const siteUrl = `http://localhost:${SITE_PORT}`;
   await until(async () => (await fetch(`${siteUrl}/api/relay/available`)).ok, 90, 'the website worker');
-  check('the site says automatic setup is available', (await (await fetch(`${siteUrl}/api/relay/available`)).json()).available === true);
+  const availableBody = await (await fetch(`${siteUrl}/api/relay/available`)).json();
+  check('the site says automatic setup and the DHT are available', availableBody.available === true && availableBody.dht === true);
+  const turn1 = await (await fetch(`${siteUrl}/api/turn`)).json();
+  const turn2Res = await fetch(`${siteUrl}/api/turn`);
+  const turn2 = await turn2Res.json();
+  check(
+    'the site hands out a Metered TURN login, and reuses it',
+    turn1.servers?.length === 2 &&
+      turn1.servers[0].url === 'turns:standard.relay.metered.ca:443?transport=tcp' &&
+      turn1.servers.every((x) => x.username === 'metered-user-1' && x.credential === 'metered-pass') &&
+      turn2.servers?.[0]?.username === 'metered-user-1' &&
+      fake.meteredLogins === 1 &&
+      turn2Res.headers.get('access-control-allow-origin') === null,
+    JSON.stringify(turn1.servers?.[0]),
+  );
   check('the site still serves its pages', (await fetch(`${siteUrl}/settings`)).status === 200 && (await fetch(`${siteUrl}/no-such-page`)).status === 404);
 
   // A callback without the sign-in cookie is turned away.
@@ -320,6 +342,12 @@ try {
   // The installed relay really is a working relay.
   const local = `http://127.0.0.1:${RELAY_PORT}`;
   check('the uploaded relay runs: /health answers', (await fetch(`${local}/health`)).ok);
+  const { isTurnHost, turnHosts } = await import('../worker/policy.js');
+  const relayTurn = await (await fetch(`${local}/turn-credentials?token=${saved.token}`)).json();
+  check(
+    "the new relay has no TURN login of its own, and may reach the site's TURN server",
+    !!first.files['turn-login.js'] && Array.isArray(relayTurn.servers) && relayTurn.servers.length === 0 && isTurnHost('standard.relay.metered.ca', turnHosts(binding(first, 'TURN_HOSTS')?.text)),
+  );
   check('the uploaded relay requires its token', (await fetch(`${local}/turn-credentials`)).status === 403 && (await fetch(`${local}/turn-credentials?token=${saved.token}`)).status === 200);
 
   // Setting up again (another device, or a repair) keeps the same token and skips the migration.

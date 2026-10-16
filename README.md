@@ -65,6 +65,25 @@ Finding peers, in order: the torrent's own trackers and about 25 public HTTP tra
 
    If Cloudflare rejects the scope names, set `OAUTH_SCOPES` (a plain variable, space-separated) to the IDs your client shows.
 
+3. **The DHT for everyone** (optional). Relays made by "set up with cloudflare" have no TURN login of their own, so the website's Worker can hand out one from your [Metered](https://www.metered.ca) account (free plan: 20 GB a month, no card). Pages ask their own relay first and the website only when the relay has none. In `frontend/` (or in the dashboard as secrets), either:
+
+   - **logins made on demand** (recommended: each one expires after 2 hours, so a copied login stops working). The app name is the part before `.metered.live` in your Metered app's address; the secret key is in the Metered dashboard:
+
+     ```sh
+     npx wrangler secret put METERED_APP
+     npx wrangler secret put METERED_SECRET_KEY
+     ```
+
+   - **or a fixed login**, from *TURN Server → Credentials → Add Credential*:
+
+     ```sh
+     npx wrangler secret put TURN_URLS          # turns:standard.relay.metered.ca:443?transport=tcp,turn:standard.relay.metered.ca:80?transport=tcp
+     npx wrangler secret put TURN_USERNAME
+     npx wrangler secret put TURN_CREDENTIAL
+     ```
+
+   The TURN server must be one relays may reach (`TURN_HOSTS` in `relay/wrangler.toml`: Metered and Xirsys). Anyone using the site can use these logins, so the 20 GB is shared by all of them. DHT lookups are small (about 20 KB each), but if the month's quota runs out, the DHT stops until it resets; downloads carry on through trackers and PEX, and nothing is charged.
+
 How "set up with cloudflare" works: the visitor approves Sayl on Cloudflare's own page; the website's Worker (`frontend/worker/index.js`) uploads `sayl-relay` to their account with a new random token, turns on its `workers.dev` address (registering one for the account if it has none), revokes the sign-in, and sends the browser home with the relay's address and token. Nothing is stored on Sayl's side. Setting up again from another device reuses the same relay and token.
 
 Downloads stay in the visitor's browser storage until they remove them. Chrome and Edge give a site up to about 60% of the free disk; Firefox and Safari give less.

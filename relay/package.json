@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test test/policy.test.mjs",
+    "test": "node --test test/policy.test.mjs test/turn-login.test.mjs",
     "test:local": "node test/local.mjs"
   },
   "devDependencies": {

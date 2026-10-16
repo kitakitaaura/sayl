@@ -34,6 +34,8 @@ Updating later: `git pull`, then `npx wrangler deploy` here. Secrets are kept.
 
 ### The DHT (optional)
 
+If the Sayl website you use hands out TURN logins (sayl.kitaaura.com does), you don't need to do anything here: when your relay has no login of its own, the page asks the website for one. Setting up your own uses your own TURN quota instead of the shared one.
+
 Without UDP, the relay can't reach the DHT directly, and Workers aren't allowed to connect to Cloudflare's own TURN servers. So the DHT goes through a TURN server at another provider. Sayl only uses it as a last resort, when trackers and PEX find no one. Each lookup is about 20 KB.
 
 With [Metered](https://www.metered.ca)'s free plan (20 GB a month, no card), either:
@@ -74,7 +76,7 @@ Peers see Cloudflare's addresses, not the person's. What passes through a relay 
 | Path | What it does |
 |---|---|
 | `GET /tunnel?host=…&port=…[&tls=1][&via=do&session=…][&token=…]` | WebSocket ⇄ TCP. `via=do` runs it in a Durable Object shared by one download (Sayl's default). |
-| `GET /turn-credentials[?token=…]` | A TURN login for the DHT, or an empty list and the reason. |
+| `GET /turn-credentials[?token=…]` | A TURN login for the DHT, or an empty list and the reason (the code is in `worker/turn-login.js`, which the website uses too). |
 | `GET /health` | `{"status":"ok"}` |
 
 ## Measured on the real internet
@@ -104,7 +106,7 @@ node cli/turn-check.mjs --relay $RELAY --token $TOKEN
 ## Tests
 
 ```sh
-npm test                                         # what the relay agrees to carry
+npm test                                         # what the relay agrees to carry, and its TURN logins
 npm install --no-save playwright-core@1.56.1     # for the website test
 node test/local.mjs      # relay + client against a real qBittorrent (Docker), with coturn for the DHT if installed
 node test/website.mjs    # the Sayl website in browser mode, in Chromium, against the same setup
