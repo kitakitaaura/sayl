@@ -13,6 +13,8 @@ export interface Prefs {
   showHashes: boolean;
   /** remembers the "select files" chip */
   selectFiles: boolean;
+  /** browser engine: also connect straight to other browsers (WebRTC); they see this browser's IP */
+  webrtc: boolean;
 }
 
 /** Read by the inline script in app.html too, so keep the key and shape stable. */
@@ -28,6 +30,7 @@ const DEFAULTS: Prefs = {
   sequentialDefault: false,
   showHashes: false,
   selectFiles: true,
+  webrtc: false,
 };
 
 function load(): Prefs {
@@ -44,6 +47,7 @@ function load(): Prefs {
       sequentialDefault: bool('sequentialDefault'),
       showHashes: bool('showHashes'),
       selectFiles: bool('selectFiles'),
+      webrtc: bool('webrtc'),
     };
   } catch {
     return { ...DEFAULTS };

@@ -17,6 +17,9 @@
  * seed:       share too: answer peers' requests for the pieces we have, and once
  *             everything wanted is in, keep going (seeding) until stop() is called
  * read:       async (piece) => the piece's bytes from storage, needed with `seed`
+ * webrtc:     { trackers: ['wss://…'], iceServers?, maxPeers? } — also connect straight to
+ *             other browsers (WebTorrent's way), found through these trackers and the
+ *             torrent's own ws(s):// ones. Browser only. Peers then see this browser's IP.
  *
  * Callbacks: onmetadata(info) once the info dict is known, onpiece(piece)
  * after each verified piece is written, oncomplete() once every wanted piece
@@ -39,6 +42,7 @@ import { openTunnel } from './tunnel.js';
 import { equalBytes, fromHex, hex, parseInfo, sha1 } from './torrent.js';
 import { TurnClient, TurnError, parseTurnUrl } from './turn.js';
 import { Dht, resolveBootstrap } from './dht.js';
+import { WebRtcTracker, webrtcSupported } from './webrtc.js';
 
 const BLOCK = 16 * 1024;
 const METADATA_PIECE = 16 * 1024;
@@ -72,6 +76,7 @@ export class Download {
     seed = false,
     read = null,
     uploadSlots = 4,
+    webrtc = null,
     log = () => {},
   }) {
     this.relay = relay;
@@ -93,6 +98,9 @@ export class Download {
     this.unchoked = new Set();
     this.lastRotateAt = 0;
     this.pieceCache = new Map(); // piece → Promise<Uint8Array | null>, oldest first
+    this.webrtcOptions = webrtc && webrtcSupported() ? webrtc : null;
+    this.rtcTrackers = [];
+    this.rtc = new Map(); // peer id (hex) → { rank, close }: browsers connected over WebRTC
     this.infoHash = fromHex(source.infoHash);
     this.peerId = new TextEncoder().encode(`-SY0001-${Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('')}`);
     this.extraTrackers = extraTrackers;
@@ -113,6 +121,7 @@ export class Download {
       verifiedBytes: 0,
       receivedBytes: 0,
       uploadedBytes: 0,
+      webrtcPeers: 0,
       wastedBytes: 0,
       hashFailures: 0,
       messagesOut: 0,
@@ -170,6 +179,7 @@ export class Download {
     this.seeding = true;
     this.log('complete; seeding');
     for (const t of this.trackers.values()) if (t.announced) t.completedPending = true;
+    for (const t of this.rtcTrackers) t.completed();
     for (const peer of this.peers) {
       if (this.#isSeed(peer)) peer.wire.close('both seeds');
       else peer.wire.notInterested();
@@ -189,6 +199,7 @@ export class Download {
     this.#addTrackers(this.source.trackers ?? [], SEED_FAST_TRACKERS);
     if (this.extraTrackers) loadPublicTrackers().then((list) => this.#addTrackers(list));
     this.#announceDue();
+    this.#startWebRtc();
     this.ticker = setInterval(() => this.#tick(), 1000);
     return this.finished;
   }
@@ -200,6 +211,7 @@ export class Download {
     this.stopped = true;
     this.stopReason = reason;
     clearInterval(this.ticker);
+    for (const t of this.rtcTrackers) t.stop();
     for (const p of this.peers) p.wire.close('download stopped');
     Promise.resolve(this.info ? this.sink.close?.() : undefined).finally(() => this.#resolve(this.summary()));
   }
@@ -231,6 +243,7 @@ export class Download {
       connectFailures: s.failures,
       trackers: s.trackers,
       dht: s.dht,
+      webrtcPeers: s.webrtcPeers,
       peersFrom: [...this.known.values()].reduce((o, k) => ((o[k.from] = (o[k.from] ?? 0) + 1), o), {}),
     };
   }
@@ -460,6 +473,48 @@ export class Download {
       k.live = false;
       return tunnel.close();
     }
+    this.#startWire(tunnel, key, k);
+  }
+
+  // ── WebRTC: straight to other browsers ──────────────────────────────────
+
+  #startWebRtc() {
+    const o = this.webrtcOptions;
+    if (!o) return;
+    const max = o.maxPeers ?? 10;
+    const own = (this.source.trackers ?? []).filter((t) => /^wss?:\/\//i.test(t));
+    const urls = [...new Set([...(o.trackers ?? []), ...own])];
+    const rtcCount = () => this.rtc.size;
+    this.rtcTrackers = urls.map(
+      (url) =>
+        new WebRtcTracker(url, {
+          infoHash: this.infoHash,
+          peerId: this.peerId,
+          iceServers: o.iceServers,
+          stats: () => ({ uploaded: this.stats.uploadedBytes, downloaded: this.stats.verifiedBytes, left: this.seeding ? 0 : this.info ? this.remaining * this.info.pieceLength : 1 }),
+          // a seeder makes no offers: browsers that need pieces offer to it
+          wantOffers: () => (this.seeding || this.stopped ? 0 : Math.min(5, max - rtcCount())),
+          accept: () => !this.stopped && rtcCount() < max,
+          onpeer: (tunnel, id, rank) => {
+            // connected twice (through two trackers): both sides keep the better-ranked one
+            const current = this.rtc.get(id);
+            if (current && rank >= current.rank) return tunnel.close();
+            if (this.stopped || (!current && rtcCount() >= max)) return tunnel.close();
+            current?.close();
+            const entry = { rank, close: () => tunnel.close() };
+            this.rtc.set(id, entry);
+            this.stats.webrtcPeers++;
+            this.connecting++;
+            this.#startWire(tunnel, `webrtc:${id}`, null, () => this.rtc.get(id) === entry && this.rtc.delete(id));
+          },
+          log: this.log,
+        }),
+    );
+    for (const t of this.rtcTrackers) t.start();
+  }
+
+  /** Runs the wire protocol over an open tunnel (relay or WebRTC). The caller counted it in `connecting`. */
+  #startWire(tunnel, key, k, ended = null) {
     let connectedAt = 0;
     this.stats.connected++;
     // Until the handshake, the connection still counts as "connecting", so it holds a slot.
@@ -486,6 +541,7 @@ export class Download {
       requests: [], // what the peer asked us for: { index, begin, length }
       serving: false,
       unchokedAt: 0,
+      rtc: !k,
     };
     const wireOptions = {
       infoHash: this.infoHash,
@@ -520,7 +576,8 @@ export class Download {
           settle();
           this.#countFailure(reason);
         }
-        this.#retryLater(k, { failed: !connectedAt, reason, since: connectedAt });
+        if (k) this.#retryLater(k, { failed: !connectedAt, reason, since: connectedAt });
+        ended?.();
         this.stats.messagesOut += tunnel.messagesOut;
         this.peers.delete(peer);
         this.#release(peer);

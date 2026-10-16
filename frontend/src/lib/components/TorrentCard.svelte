@@ -102,7 +102,11 @@
       {:else if t.state === 'seeding'}
         <span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>
         <span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span>
-        <span title="connected peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
+        {#if BROWSER_ENGINE && t.peers === 0}
+          <span class="quiet">no one needs pieces right now · looks for downloaders every few minutes</span>
+        {:else}
+          <span title="connected peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
+        {/if}
         {#if t.seedEndsAt}<span title="seeding stops in"><Clock size={13} aria-hidden="true" />stops in {fmtDur((t.seedEndsAt - app.now) / 1000)}</span>{/if}
       {:else if t.state === 'metadata'}
         <span>fetching the file list from peers…</span>
@@ -258,6 +262,9 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+  .stats .quiet {
+    color: var(--muted);
   }
   .stats :global(svg) {
     color: var(--muted);

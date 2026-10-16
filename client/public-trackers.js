@@ -35,6 +35,9 @@ export const BUNDLED_TRACKERS = [
   'https://t.213891.xyz:443/announce',
 ];
 
+/** WebTorrent trackers: they introduce browsers to each other for WebRTC (used only when that's turned on). */
+export const WEBRTC_TRACKERS = ['wss://tracker.openwebtorrent.com', 'wss://tracker.webtorrent.dev', 'wss://tracker.files.fm:7073/announce'];
+
 const LISTS = [
   'https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all_http.txt',
   'https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_all_https.txt',

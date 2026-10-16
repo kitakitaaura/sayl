@@ -27,6 +27,7 @@ import {
   safePathParts,
   sha1,
   torrentFile,
+  WEBRTC_TRACKERS,
   type Info,
   type Summary,
 } from '$bt';
@@ -75,6 +76,8 @@ interface Rec {
   seedUntil?: number | null;
   /** made here, from the visitor's own files */
   created?: boolean;
+  /** start every file as soon as the metadata arrives (the "select files" chip was off); kept across reloads */
+  autoSelect?: AutoSelect | null;
 }
 
 /** A file picked to share: where it goes in the torrent, and its contents. */
@@ -104,8 +107,6 @@ interface Item {
   uploadedBase: number;
   peers: number;
   seeds: number;
-  /** start every file as soon as the metadata arrives (the "select files" chip was off) */
-  autoSelect: AutoSelect | null;
   links: string[];
 }
 
@@ -198,7 +199,7 @@ export class BrowserEngine {
     return false;
   }
 
-  /** Called when the relay settings change. */
+  /** Called when the relay or connection settings change: everything running starts again with them. */
   relayChanged(): void {
     for (const item of this.items.values()) {
       const d = item.dl;
@@ -225,7 +226,6 @@ export class BrowserEngine {
       uploadedBase: 0,
       peers: 0,
       seeds: 0,
-      autoSelect: null,
       links: [],
     };
   }
@@ -350,6 +350,8 @@ export class BrowserEngine {
       dht: { getTurn: () => fetchTurnServers(relay, { fallback: '/api/turn' }) },
       seed: !!rec.seed,
       read: (piece) => this.readPiece(item, piece),
+      // straight to other browsers, only if the visitor turned it on (peers then see their IP)
+      webrtc: settings.prefs.webrtc ? { trackers: WEBRTC_TRACKERS } : null,
     });
     item.dl = d;
     item.dlStartedAt = Date.now();
@@ -436,9 +438,9 @@ export class BrowserEngine {
       item.rec.hasInfo = false; // fetched again next visit
     }
     this.changed(true);
-    if (item.autoSelect) {
-      const { sequential, seed } = item.autoSelect;
-      item.autoSelect = null;
+    if (item.rec.autoSelect) {
+      const { sequential, seed } = item.rec.autoSelect;
+      item.rec.autoSelect = null;
       try {
         await this.select(item.rec.hash, info.files.map((_, i) => i), { sequential, seed });
       } catch (err) {
@@ -493,7 +495,7 @@ export class BrowserEngine {
         paused: false,
         error: null,
       });
-      item.autoSelect = autoSelect;
+      item.rec.autoSelect = autoSelect;
       this.items.set(m.infoHash, item);
       this.changed(true);
       this.schedule();
@@ -555,7 +557,9 @@ export class BrowserEngine {
   async create(files: ShareFile[], name: string, onprogress: (fraction: number) => void, signal?: AbortSignal): Promise<{ view: TorrentView; magnet: string; torrent: Uint8Array }> {
     const total = files.reduce((n, f) => n + f.file.size, 0);
     await this.checkSpace(total);
-    const trackers = await loadPublicTrackers();
+    const http = await loadPublicTrackers();
+    // with WebRTC on, the magnet also names WebTorrent trackers, so browsers can come straight here
+    const trackers = settings.prefs.webrtc ? [...http.slice(0, 7), ...WEBRTC_TRACKERS, ...http.slice(7)] : http;
     let t: Awaited<ReturnType<typeof createTorrent>>;
     try {
       t = await createTorrent({

@@ -93,6 +93,8 @@ export interface DownloadOptions {
   read?: ((piece: number) => Promise<Uint8Array | null>) | null;
   /** peers unchoked at once while sharing (default 4) */
   uploadSlots?: number;
+  /** also connect straight to other browsers over WebRTC, found through these WebTorrent trackers (browser only) */
+  webrtc?: { trackers: string[]; iceServers?: RTCIceServer[]; maxPeers?: number } | null;
   log?: (line: string) => void;
 }
 
@@ -129,6 +131,8 @@ export function piecesForFiles(info: Info, fileIndexes: Iterable<number>): Uint8
 export function fileProgress(info: Info, have: Uint8Array): number[];
 export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
+export const WEBRTC_TRACKERS: string[];
+export function webrtcSupported(): boolean;
 export function loadPublicTrackers(options?: { timeoutMs?: number }): Promise<string[]>;
 
 export interface CreatedTorrent {

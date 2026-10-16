@@ -107,10 +107,11 @@ node cli/turn-check.mjs --relay $RELAY --token $TOKEN
 
 ```sh
 npm test                                         # what the relay agrees to carry, and its TURN logins
-npm install --no-save playwright-core@1.56.1     # for the website test
+npm install --no-save playwright-core@1.56.1 bittorrent-tracker@11.2.3 webtorrent@3.0.21   # for the browser tests
 node test/local.mjs      # relay + client against a real qBittorrent (Docker), with coturn for the DHT if installed
 node test/website.mjs    # the Sayl website in browser mode, in Chromium, against the same setup
 node test/setup.mjs      # "set up with cloudflare": sign-in, upload, workers.dev, against a stand-in Cloudflare
+node test/webrtc.mjs     # direct connections (WebRTC) through a WebTorrent tracker: Sayl to Sayl, and with the WebTorrent client
 ```
 
 `local.mjs` downloads through the relay in every mode and checks: refusals, file choice, sequential order, resuming, seeding (qBittorrent gets a torrent made by the client, metadata included, from a bare magnet), the DHT as the last resort, and a refused TURN login. `website.mjs` goes through the site like a person: set the relay, add a magnet and a `.torrent`, pick files, save them and compare them byte for byte, recheck, pause and resume, reload mid-download, remove, and share a folder that qBittorrent then downloads from the page (seeding stops at the ratio limit).

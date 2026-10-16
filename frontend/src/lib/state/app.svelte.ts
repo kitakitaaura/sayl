@@ -97,6 +97,11 @@ class App {
     }
   }
 
+  /** Connection settings changed (browser engine): running torrents start again with them. */
+  connectionsChanged(): void {
+    this.engine?.relayChanged();
+  }
+
   /** The relay settings changed (browser engine). */
   relaySaved(): void {
     if (!this.engine) return;

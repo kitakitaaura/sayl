@@ -17,6 +17,10 @@
     settings.set('seedDefault', v);
     app.chips.seed = v;
   }
+  function setWebrtc(v: boolean) {
+    settings.set('webrtc', v);
+    app.connectionsChanged();
+  }
   function setSequentialDefault(v: boolean) {
     settings.set('sequentialDefault', v);
     app.chips.sequential = v;
@@ -78,6 +82,16 @@
         <div class="row">
           <div class="lbl"><b>seed after by default</b><span>turns on "seed after" for every new torrent. finished torrents then keep sharing while this tab is open.</span></div>
           <Switch label="seed after by default" checked={p.seedDefault} onchange={setSeedDefault} />
+        </div>
+        <div class="row">
+          <div class="lbl">
+            <b>direct connections (webrtc)</b>
+            <span>
+              also trade pieces straight with other browsers: other {name} users and webtorrent apps. faster, and they can reach you when you
+              seed. but those browsers and the webtorrent trackers see your ip address, not just your relay's. off by default.
+            </span>
+          </div>
+          <Switch label="direct connections (webrtc)" checked={p.webrtc} onchange={setWebrtc} />
         </div>
         <div class="row">
           <div class="lbl"><b>ratio limit</b><span>seeding stops once a torrent has uploaded this many times its size, or when you close this tab.</span></div>

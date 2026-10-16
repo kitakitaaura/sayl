@@ -4,13 +4,13 @@
 
 There are two ways to run it:
 
-- **In the browser** (the default). The BitTorrent client runs in the page, and each person's own free Cloudflare Worker, the **relay**, connects it to peers. The website is static files on Cloudflare Pages.
+- **In the browser** (the default). The BitTorrent client runs in the page, and each person's own free Cloudflare Worker, the **relay**, connects it to peers. The website runs on Cloudflare Workers: the built site as static files, plus a small Worker for relay setup and TURN logins.
 - **On a server** (self-hosted). The original version: qBittorrent on a VPS downloads for everyone and hands out the files over HTTPS. See *The server version* below.
 
 ## How it fits together
 
 ```
-sayl.kitaaura.com          Cloudflare Pages: the website, plain static files
+sayl.kitaaura.com          Cloudflare Workers: the website (static files) and its Worker (relay setup, TURN logins)
   └─ in each visitor's browser:
        BitTorrent client (client/)  ── WSS ──>  their relay (relay/), a Worker on their own Cloudflare account
        files in the browser's private storage (OPFS), saved to disk when they choose
@@ -21,6 +21,8 @@ sayl.kitaaura.com          Cloudflare Pages: the website, plain static files
 Finding peers, in order: the torrent's own trackers and about 25 public HTTP trackers, then PEX, and only when that finds no one, the DHT through a TURN server. See [relay/README.md](relay/README.md) for the relay, the DHT setup, what the relay agrees to carry, and measured speeds (17–20 MB/s on a home connection).
 
 **Sharing** is opt-in, per torrent: the "seed after" chip, the seed button on a finished torrent, or *share your files* (pick files or a folder, or drop them on the page). A torrent being shared uploads while it runs and keeps seeding once complete, until it has uploaded the ratio limit (settings: 0.5, 1 or 2 times its size; 1 by default) or the tab closes. Relays can't accept incoming connections, so a seeder connects out to the peers the trackers name (asking the magnet's 10 trackers every 5 minutes) and reconnects to peers that drop it. A torrent made in Sayl lists the public HTTP trackers, and its files are copied into the browser's storage, so seeding survives a reload. Seeders never use the DHT, to spare the TURN quota.
+
+**Direct connections (WebRTC)** are off by default and turned on in settings. With them on, Sayl also trades pieces straight with other browsers, the way WebTorrent does: other Sayl tabs and WebTorrent apps, found through public WebTorrent trackers (`wss://tracker.openwebtorrent.com`, `wss://tracker.webtorrent.dev`, `wss://tracker.files.fm:7073`), with Google's and Twilio's free STUN servers. This doesn't go through the relay, so it's faster and lets other browsers reach a seeder within seconds; the cost is that those browsers and trackers see the person's IP address. Torrents made with it on also list the WebTorrent trackers in their magnet. Seeding rules are the same either way.
 
 ## Put it online
 
@@ -67,7 +69,7 @@ Finding peers, in order: the torrent's own trackers and about 25 public HTTP tra
 
    If Cloudflare rejects the scope names, set `OAUTH_SCOPES` (a plain variable, space-separated) to the IDs your client shows.
 
-3. **The DHT for everyone** (optional). Relays made by "set up with cloudflare" have no TURN login of their own, so the website's Worker can hand out one from your [Metered](https://www.metered.ca) account (free plan: 20 GB a month, no card). Pages ask their own relay first and the website only when the relay has none. In `frontend/` (or in the dashboard as secrets), either:
+3. **The DHT for everyone** (optional). Relays made by "set up with cloudflare" have no TURN login of their own, so the website's Worker can hand out one from your [Metered](https://www.metered.ca) account (free plan: 20 GB a month, no card). A page asks its own relay first, and the website only when the relay has none. In `frontend/` (or in the dashboard as secrets), either:
 
    - **logins made on demand** (recommended: each one expires after 2 hours, so a copied login stops working). The app name is the part before `.metered.live` in your Metered app's address; the secret key is in the Metered dashboard:
 
@@ -259,6 +261,7 @@ cd relay && npm test                       # what the relay agrees to carry
 cd relay && node test/local.mjs            # relay + client against a real qBittorrent (Docker)
 cd relay && node test/website.mjs          # the website in browser mode, clicked through in Chromium
 cd relay && node test/setup.mjs            # "set up with cloudflare", against a stand-in for Cloudflare's sign-in and API
+cd relay && node test/webrtc.mjs           # direct connections: Sayl tab to Sayl tab, and Sayl with the WebTorrent client, both ways
 cd backend && npm install && npm test      # the server version
 ```
 

@@ -51,7 +51,8 @@
     {#if BROWSER_ENGINE}
       <p>
         there are no accounts. your torrents, your files and your settings stay in this browser. peers see your relay's cloudflare address, not
-        yours. finding peers for a torrent asks public trackers, and when nothing else works, the dht through a turn server (your relay's own, or one {name}
+        yours, unless you turn on direct connections (webrtc) in settings: then other browsers you trade with, and the webtorrent trackers that
+        introduce them, see your ip address. finding peers for a torrent asks public trackers, and when nothing else works, the dht through a turn server (your relay's own, or one {name}
         provides); those see the torrent's info hash, as with any bittorrent client.
       </p>
     {:else}
