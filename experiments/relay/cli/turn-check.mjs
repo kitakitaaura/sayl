@@ -62,24 +62,32 @@ if (!o.direct && !o.relay) fail('pass --relay (or --direct to skip the relay)');
 const relay = o.relay ? { url: o.relay, via: o.via, session: randomBytes(12).toString('base64url'), token: o.token } : null;
 
 // 1. Credentials.
-let server;
+let servers;
 if (o['turn-url']) {
-  server = { url: o['turn-url'], username: o.username, credential: o.password };
+  servers = [{ url: o['turn-url'], username: o.username, credential: o.password }];
 } else {
   if (!o['turn-key-id'] || !o['turn-api-token']) fail('pass --turn-key-id and --turn-api-token (Cloudflare dashboard → Realtime → TURN)');
-  server = await cloudflareTurn(o['turn-key-id'], o['turn-api-token']);
-  ok(`got TURN credentials from Cloudflare (${server.url})`);
+  servers = await cloudflareTurn(o['turn-key-id'], o['turn-api-token']);
+  ok(`got TURN credentials from Cloudflare (${servers.length} TCP/TLS servers: ${servers.map((c) => c.url.replace(/\?.*/, '')).join(', ')})`);
 }
 
-// 2–3. Connect and allocate.
-const target = parseTurnUrl(server.url);
+// 2–3. Connect (trying each server until one works) and allocate.
 let stream;
-try {
-  stream = o.direct ? await directStream(target) : await openTunnel(relay, target);
-} catch (err) {
-  fail(`couldn't open a TCP connection to ${target.host}:${target.port}${o.direct ? '' : ' through the relay'}: ${err.message}`);
+let server;
+let target;
+for (const candidate of servers) {
+  target = parseTurnUrl(candidate.url);
+  const where = `${target.tls ? 'TLS' : 'TCP'} ${target.host}:${target.port}${o.direct ? ' (direct)' : ` through the relay (${o.via})`}`;
+  try {
+    stream = o.direct ? await directStream(target) : await openTunnel(relay, target);
+    server = candidate;
+    ok(`connected: ${where}`);
+    break;
+  } catch (err) {
+    info(`can't connect: ${where}: ${err.message.slice(0, 120)}`);
+  }
 }
-ok(`TCP${target.tls ? '+TLS' : ''} connection to ${target.host}:${target.port}${o.direct ? ' (direct)' : ` through the relay (${o.via})`}`);
+if (!stream) fail(`couldn't reach any TURN server${o.direct ? '' : ' through the relay'}`);
 let turn;
 try {
   turn = await TurnClient.connect(stream, { username: server.username, password: server.credential });
@@ -162,12 +170,12 @@ async function cloudflareTurn(keyId, apiToken) {
     const servers = [body.iceServers].flat().filter(Boolean);
     const candidates = [];
     for (const s of servers) for (const url of [s.urls].flat()) candidates.push({ url, username: s.username, credential: s.credential });
-    const pick =
-      candidates.find((c) => /^turns:.*:443\b.*transport=tcp/.test(c.url)) ??
-      candidates.find((c) => /^turn:.*transport=tcp/.test(c.url)) ??
-      candidates.find((c) => /^turns:/.test(c.url));
-    if (!pick?.username) fail(`Cloudflare's answer had no TCP TURN server: ${JSON.stringify(body).slice(0, 300)}`);
-    return pick;
+    // TCP or TLS only (the relay can't carry UDP); non-web ports first, since Workers may not reach Cloudflare on 80/443.
+    const tcp = candidates.filter((c) => c.username && (/^turns:/.test(c.url) || /transport=tcp/.test(c.url)));
+    const rank = (c) => (/:(80|443)\b/.test(c.url) ? 1 : 0);
+    tcp.sort((a, b) => rank(a) - rank(b));
+    if (!tcp.length) fail(`Cloudflare's answer had no TCP TURN server: ${JSON.stringify(body).slice(0, 300)}`);
+    return tcp;
   }
   fail(`Cloudflare refused to make TURN credentials: ${lastError}`);
 }
