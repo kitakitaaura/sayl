@@ -27,9 +27,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { Download } from '../public/client/download.js';
-import { parseMagnet, parseTorrentFile } from '../public/client/torrent.js';
-import { fetchTurnServers } from '../public/client/turn.js';
+import { Download } from '../../client/download.js';
+import { parseMagnet, parseTorrentFile } from '../../client/torrent.js';
+import { fetchTurnServers } from '../../client/turn.js';
 
 const DEBIAN = 'https://cdimage.debian.org/debian-cd/current/amd64/';
 

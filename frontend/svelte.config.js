@@ -1,13 +1,19 @@
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
-const apiOrigin = new URL(process.env.API_URL?.trim() || 'http://localhost:8080').origin;
+const env = (key) => process.env[key]?.trim() ?? '';
+const engine = env('ENGINE') || (env('API_URL') ? 'server' : 'browser');
+const apiOrigin = new URL(env('API_URL') || 'http://localhost:8080').origin;
 const turnstile = 'https://challenges.cloudflare.com';
+// In the browser engine the page talks to the visitor's own relay (any address), public tracker
+// lists on GitHub and DNS over HTTPS, so it may connect anywhere over https and wss.
+const connect = engine === 'browser' ? ['self', 'https:', 'wss:'] : ['self', apiOrigin];
 
 /** Every page is prerendered to static HTML for Cloudflare Pages. */
 export default {
   preprocess: vitePreprocess(),
   kit: {
+    alias: { $bt: '../client' },
     // 404.html is served by Pages for unknown paths and renders the error page
     adapter: adapter({ pages: 'build', assets: 'build', fallback: '404.html', strict: true }),
     // SvelteKit hashes its own inline scripts into this policy (a <meta> tag on each page)
@@ -19,7 +25,8 @@ export default {
         'style-src': ['self', 'unsafe-inline'],
         'img-src': ['self', 'data:'],
         'font-src': ['self'],
-        'connect-src': ['self', apiOrigin],
+        'connect-src': connect,
+        'worker-src': ['self'],
         'frame-src': [turnstile],
         'base-uri': ['self'],
         'form-action': ['self'],

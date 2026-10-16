@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import RelaySetup from '$lib/components/RelaySetup.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
   import Switch from '$lib/components/Switch.svelte';
-  import { APP_NAME } from '$lib/config';
+  import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
+  import { fmtBytes } from '$lib/format';
   import { app } from '$lib/state/app.svelte';
   import { RATIO_CHOICES, settings, type Theme } from '$lib/state/settings.svelte';
   import { ui } from '$lib/state/ui.svelte';
@@ -18,6 +21,16 @@
     settings.set('sequentialDefault', v);
     app.chips.sequential = v;
   }
+
+  // browser engine: how much of the browser's storage downloads use
+  let usage = $state<{ used: number; quota: number } | null>(null);
+  onMount(() => {
+    if (!BROWSER_ENGINE) return;
+    navigator.storage
+      ?.estimate?.()
+      .then((e) => (usage = e.quota ? { used: e.usage ?? 0, quota: e.quota } : null))
+      .catch(() => {});
+  });
 </script>
 
 <svelte:head>
@@ -49,6 +62,32 @@
       </div>
     </section>
 
+    {#if BROWSER_ENGINE}
+      <section class="section" aria-labelledby="s-relay">
+        <h2 id="s-relay">relay</h2>
+        <div class="row">
+          <div class="lbl">
+            <b>your relay</b><span>the cloudflare worker that connects this browser to other peers. it runs on your own free cloudflare account.</span>
+          </div>
+          <RelaySetup compact />
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="s-st">
+        <h2 id="s-st">storage</h2>
+        <div class="row">
+          <div class="lbl">
+            <b>browser storage</b>
+            <span>
+              downloads stay in this browser's private storage until you remove them.
+              {#if usage}{fmtBytes(usage.used)} used, about {fmtBytes(Math.max(0, usage.quota - usage.used))} free.{/if}
+            </span>
+          </div>
+        </div>
+      </section>
+    {/if}
+
+    {#if !BROWSER_ENGINE}
     <section class="section" aria-labelledby="s-dl">
       <h2 id="s-dl">downloads</h2>
       <div class="row">
@@ -83,10 +122,12 @@
       {/if}
     </section>
 
+    {/if}
+
     <section class="section" aria-labelledby="s-pr">
       <h2 id="s-pr">privacy</h2>
       <div class="row">
-        <div class="lbl"><b>clear my torrents</b><span>stops and deletes all your torrents and their files now.</span></div>
+        <div class="lbl"><b>clear my torrents</b><span>stops and deletes all your torrents and their files now{BROWSER_ENGINE ? ', freeing the browser storage they use' : ''}.</span></div>
         <button
           type="button"
           class="btn sm danger"
@@ -100,6 +141,7 @@
             })}>clear</button
         >
       </div>
+      {#if !BROWSER_ENGINE}
       <div class="row">
         <div class="lbl"><b>reset session</b><span>starts a new anonymous session. your current torrents become unreachable and delete on schedule.</span></div>
         <button
@@ -115,6 +157,7 @@
             })}>reset</button
         >
       </div>
+      {/if}
     </section>
 
     <section class="section" aria-labelledby="s-adv">

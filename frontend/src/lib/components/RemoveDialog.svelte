@@ -1,6 +1,7 @@
 <script lang="ts">
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import { fmtDur, keepHours } from '$lib/format';
+  import { BROWSER_ENGINE } from '$lib/config';
   import { app } from '$lib/state/app.svelte';
   import Dialog from './Dialog.svelte';
 
@@ -32,7 +33,7 @@
     {#if t?.state === 'seeding'}
       stop seeding and keep the files to download{left !== null ? ` for ${fmtDur(left)}` : ''}, or delete everything now.
     {:else if t && (t.progress >= 1 || t.completedAt !== null)}
-      this deletes the files now. you won't be able to download them anymore.
+      this deletes the files {BROWSER_ENGINE ? "from your browser's storage" : 'now'}. files you already saved stay where you saved them.
     {:else}
       this deletes the torrent and everything downloaded so far.
     {/if}

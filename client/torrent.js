@@ -71,7 +71,13 @@ export function parseInfo(infoBytes) {
   } else {
     files = [{ path: name, length: info.length }];
   }
-  const length = files.reduce((n, f) => n + f.length, 0);
+  let offset = 0;
+  for (const f of files) {
+    if (!Number.isSafeInteger(f.length) || f.length < 0) throw new Error('the info dict is malformed');
+    f.offset = offset;
+    offset += f.length;
+  }
+  const length = offset;
   const count = pieces.length / 20;
   if (!Number.isSafeInteger(length) || Math.ceil(length / pieceLength) !== count) throw new Error('the info dict sizes don\'t add up');
   return {

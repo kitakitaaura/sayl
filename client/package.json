@@ -1,0 +1,14 @@
+{
+  "name": "sayl-client",
+  "private": true,
+  "type": "module",
+  "description": "The BitTorrent client Sayl runs in the browser, connecting to peers through a relay",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

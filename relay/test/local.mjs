@@ -19,12 +19,12 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decode, encode } from '../public/client/bencode.js';
-import { Dht } from '../public/client/dht.js';
-import { Download } from '../public/client/download.js';
-import { fromHex, parseTorrentFile } from '../public/client/torrent.js';
-import { TurnClient, fetchTurnServers } from '../public/client/turn.js';
-import { openTunnel } from '../public/client/tunnel.js';
+import { decode, encode } from '../../client/bencode.js';
+import { Dht } from '../../client/dht.js';
+import { Download } from '../../client/download.js';
+import { fromHex, parseTorrentFile } from '../../client/torrent.js';
+import { TurnClient, fetchTurnServers } from '../../client/turn.js';
+import { openTunnel } from '../../client/tunnel.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -83,7 +83,7 @@ try {
   // 3. qBittorrent seeding it.
   const config = join(work, 'config');
   const password = randomBytes(12).toString('hex');
-  execFileSync('node', [join(root, '../../deploy/qbit-init/init.mjs')], {
+  execFileSync('node', [join(root, '../deploy/qbit-init/init.mjs')], {
     env: { ...process.env, QBIT_USERNAME: 'admin', QBIT_PASSWORD: password, TORRENT_PORT: String(QBIT_PORT), QBIT_CONFIG_DIR: join(config, 'qBittorrent') },
     stdio: 'inherit',
   });
@@ -118,7 +118,7 @@ try {
   }, 60, 'qbittorrent seeding');
   check('qbittorrent is seeding the test file', true);
 
-  // A TURN server for the DHT tests (step 9), if coturn is installed. The relay hands out its login.
+  // A TURN server for the DHT tests (step 8), if coturn is installed. The relay hands out its login.
   let hasCoturn = true;
   try {
     execFileSync('which', ['turnserver'], { stdio: 'ignore' });
@@ -188,6 +188,53 @@ try {
   }
   check('the tracker was asked through the relay', announces >= 2, `${announces} announces`);
 
+  // 6b. Waiting for a choice of pieces, fetching only those, in order, then resuming for the rest.
+  {
+    const half = Math.floor(hashes.length / 2);
+    const firstHalf = new Uint8Array(hashes.length).fill(1, 0, half);
+    const out = new Uint8Array(SIZE);
+    const order = [];
+    let selectedAt = Infinity;
+    let earlyWrites = 0;
+    const sink = {
+      write: (offset, b, piece) => {
+        if (Date.now() < selectedAt) earlyWrites++;
+        order.push(piece);
+        out.set(b, offset);
+      },
+    };
+    const relay = { url: relayUrl, via: 'worker' };
+    const first = new Download({ relay, source: { infoHash: torrent.infoHash, trackers: [trackerUrl], peers: [] }, sink, extraTrackers: false, wanted: null, sequential: true });
+    let metadataSeen = false;
+    first.onmetadata = () => {
+      metadataSeen = true;
+      setTimeout(() => {
+        selectedAt = Date.now();
+        first.select(firstHalf);
+      }, 1500);
+    };
+    const t1 = setTimeout(() => first.stop('time limit'), 120_000);
+    const s1 = await first.start();
+    clearTimeout(t1);
+    check(
+      'waits for a choice after the metadata, then fetches only the chosen pieces',
+      metadataSeen && s1.complete && earlyWrites === 0 && order.length === half && order.every((p) => firstHalf[p]),
+      `${order.length} pieces, first ones: ${order.slice(0, 5).join(',')}`,
+    );
+    check('sequential mode starts at the beginning', order[0] < 4, `first piece ${order[0]}`);
+    const have = first.have;
+    const second = new Download({ relay, source: { ...torrent, peers: [] }, sink, extraTrackers: false, wanted: 'all', have });
+    const t2 = setTimeout(() => second.stop('time limit'), 120_000);
+    const s2 = await second.start();
+    clearTimeout(t2);
+    const sha = createHash('sha256').update(out).digest('hex');
+    check(
+      'resuming fetches only what is missing, and the file comes out whole',
+      s2.complete && s2.verifiedBytes === SIZE - half * PIECE && sha === payloadSha,
+      `${s2.verifiedBytes} bytes fetched on resume`,
+    );
+  }
+
   // 7. The command-line tool, writing to a file.
   const torrentPath = join(work, 'payload.torrent');
   writeFileSync(torrentPath, torrentBytes);
@@ -200,32 +247,7 @@ try {
   const cliSummary = safeJson(cliOut.trim().split('\n').pop());
   check('cli downloads to a file and the sha-256 matches', code === 0 && cliSummary?.sha256 === 'match' && readFileSync(outPath).length === SIZE, cliOut.slice(-300).replace(/\s+/g, ' '));
 
-  // 8. The test page in a real browser (skipped unless playwright-core is installed).
-  const pw = await import('playwright-core').catch(() => null);
-  if (!pw) {
-    console.log('skip the browser page (npm install --no-save playwright-core to run it)');
-  } else {
-    const browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
-    cleanups.push(() => browser.close());
-    const page = await browser.newPage();
-    const consoleLines = [];
-    page.on('console', (m) => consoleLines.push(m.text()));
-    page.on('pageerror', (e) => consoleLines.push(`page error: ${e.message}`));
-    await page.goto(`${relayUrl}/`);
-    await page.fill('#source', `magnet:?xt=urn:btih:${torrent.infoHash}&tr=${encodeURIComponent(trackerUrl)}`);
-    await page.selectOption('#mode', 'test');
-    await page.click('#start');
-    await page
-      .waitForFunction(() => document.getElementById('log').textContent.includes('summary (paste this back)'), null, { timeout: 120_000 })
-      .catch(async (err) => {
-        throw new Error(`${err.message.split('\n')[0]} · status: ${await page.textContent('#status')} · log: ${await page.textContent('#log')} · console: ${consoleLines.join(' | ')}`);
-      });
-    const text = await page.textContent('#log');
-    const pageSummary = safeJson(text.slice(text.indexOf('{')));
-    check('the browser page downloads and verifies the whole torrent', pageSummary?.complete === true && pageSummary.verifiedBytes === SIZE, `${pageSummary?.averageMBps?.toFixed(1)} MB/s`);
-  }
-
-  // 9. The DHT over TURN, through the relay (skipped unless coturn is installed).
+  // 8. The DHT over TURN, through the relay (skipped unless coturn is installed).
   if (!hasCoturn) {
     console.log('skip the DHT over TURN (install coturn to run it)');
   } else {

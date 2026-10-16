@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decode, encode } from '../public/client/bencode.js';
-import { parseMagnet, parseTorrentFile } from '../public/client/torrent.js';
-import { announceUrls, parseResponse } from '../public/client/tracker.js';
-import { parsePex } from '../public/client/wire.js';
-import { isAnnounceRequest, parseTarget, startsWithBtHandshake } from '../worker/policy.js';
+import { decode, encode } from '../bencode.js';
+import { parseMagnet, parseTorrentFile } from '../torrent.js';
+import { announceUrls, parseResponse } from '../tracker.js';
+import { parsePex } from '../wire.js';
 
 const bytes = (s) => new TextEncoder().encode(s);
-const target = (q, allowPrivate = false) => parseTarget(new URLSearchParams(q), { allowPrivate });
 
 test('bencode round trip and info range', () => {
   const v = { announce: 'http://t/announce', info: { length: 5, name: 'a', 'piece length': 16384, pieces: new Uint8Array(20) } };
@@ -60,34 +58,8 @@ test('parses pex', () => {
   assert.deepEqual(parsePex(encode({ added: new Uint8Array([10, 0, 0, 1, 0, 80]) })), [{ host: '10.0.0.1', port: 80 }]);
 });
 
-test('relay policy: handshakes and announces', () => {
-  assert.ok(startsWithBtHandshake(new Uint8Array([19, ...bytes('BitTorrent protocol'), 0])));
-  assert.ok(!startsWithBtHandshake(bytes('GET / HTTP/1.1')));
-  assert.ok(isAnnounceRequest(bytes('GET /announce?info_hash=%01%02&port=1 HTTP/1.0\r\nHost: t\r\n\r\n')));
-  assert.ok(isAnnounceRequest(bytes('GET /abc123/announce.php?x=1&info_hash=%01 HTTP/1.1\r\nHost: t\r\n\r\n')));
-  assert.ok(!isAnnounceRequest(bytes('GET /announce HTTP/1.0\r\nHost: t\r\n\r\n')), 'no info_hash');
-  assert.ok(!isAnnounceRequest(bytes('POST /announce?info_hash=1 HTTP/1.0\r\n\r\n')));
-  assert.ok(!isAnnounceRequest(bytes('GET /announce?info_hash=1 HTTP/1.0\r\nHost: t\r\n\r\nGET /other HTTP/1.0\r\n\r\n')), 'smuggled second request');
-  assert.ok(!isAnnounceRequest(bytes('GET /announce?info_hash=1 HTTP/1.0\r\nHost: t\r\n')), 'unterminated');
-});
-
-test('relay policy: targets', () => {
-  assert.deepEqual(target('host=1.2.3.4&port=6881'), { host: '1.2.3.4', port: 6881, tls: false });
-  assert.deepEqual(target('host=tracker.example.org&port=443&tls=1'), { host: 'tracker.example.org', port: 443, tls: true });
-  assert.deepEqual(target('host=[2001:db8::1]&port=6881'), { host: '2001:db8::1', port: 6881, tls: false });
-  for (const q of ['host=10.1.2.3&port=1', 'host=127.0.0.1&port=1', 'host=192.168.1.1&port=1', 'host=172.20.0.1&port=1', 'host=169.254.169.254&port=80',
-    'host=100.64.0.1&port=1', 'host=::1&port=1', 'host=fd00::1&port=1', 'host=fe80::1&port=1', 'host=::ffff:10.0.0.1&port=1', 'host=localhost&port=1', 'host=x.internal&port=1'])
-    assert.equal(target(q).error, 'private address', q);
-  assert.equal(target('host=10.1.2.3&port=1', true).host, '10.1.2.3');
-  assert.equal(target('host=1.2.3.4&port=25').error, 'port not allowed');
-  assert.equal(target('host=1.2.3.4&port=0').error, 'bad port');
-  assert.equal(target('host=1.2.3.999&port=1').error, 'bad host');
-  assert.equal(target('host=a b&port=1').error, 'bad host');
-  assert.equal(target('port=1').error, 'missing host');
-});
-
 test('md5 matches the RFC 1321 test vectors', async () => {
-  const { md5 } = await import('../public/client/md5.js');
+  const { md5 } = await import('../md5.js');
   const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   assert.equal(hex(md5(bytes(''))), 'd41d8cd98f00b204e9800998ecf8427e');
   assert.equal(hex(md5(bytes('abc'))), '900150983cd24fb0d6963f7d28e17f72');
@@ -95,7 +67,7 @@ test('md5 matches the RFC 1321 test vectors', async () => {
 });
 
 test('stun messages and xor addresses round trip', async () => {
-  const { stunMessage, parseStun, encodeXorAddress, decodeXorAddress, withIntegrity } = await import('../public/client/turn.js');
+  const { stunMessage, parseStun, encodeXorAddress, decodeXorAddress, withIntegrity } = await import('../turn.js');
   const txid = new Uint8Array(12).fill(9);
   const msg = stunMessage(0x0016, [[0x0012, encodeXorAddress('203.0.113.7', 6881)], [0x0013, bytes('hello')]], txid);
   const parsed = parseStun(msg);
@@ -108,27 +80,8 @@ test('stun messages and xor addresses round trip', async () => {
   assert.throws(() => encodeXorAddress('2001:db8::1', 1));
 });
 
-test('relay policy: turn', async () => {
-  const { isTurnAllocate, turnHosts } = await import('../worker/policy.js');
-  const allocate = new Uint8Array([0, 3, 0, 8, 0x21, 0x12, 0xa4, 0x42, ...new Uint8Array(12), 0, 0x19, 0, 4, 17, 0, 0, 0]);
-  assert.ok(isTurnAllocate(allocate));
-  assert.ok(!isTurnAllocate(allocate.slice(0, 24)), 'truncated');
-  const binding = allocate.slice();
-  binding[1] = 1;
-  assert.ok(!isTurnAllocate(binding), 'a binding request is not an allocate');
-  assert.deepEqual([...turnHosts(undefined)], ['turn.cloudflare.com']);
-  assert.deepEqual([...turnHosts(' A.example , b.example ')], ['a.example', 'b.example']);
-  const { isTurnHost } = await import('../worker/policy.js');
-  const hosts = turnHosts('turn.example.org,*.relay.example.com');
-  assert.ok(isTurnHost('turn.example.org', hosts));
-  assert.ok(isTurnHost('global.relay.example.com', hosts));
-  assert.ok(!isTurnHost('relay.example.com', hosts), 'the bare parent is not a subdomain');
-  assert.ok(!isTurnHost('evilrelay.example.com', hosts));
-  assert.ok(!isTurnHost('x.relay.example.com.evil.net', hosts));
-});
-
 test('turn urls: only TCP or TLS ones are usable through the relay', async () => {
-  const { parseTurnUrl } = await import('../public/client/turn.js');
+  const { parseTurnUrl } = await import('../turn.js');
   assert.deepEqual(parseTurnUrl('turns:standard.relay.metered.ca:443?transport=tcp'), { host: 'standard.relay.metered.ca', port: 443, tls: true });
   assert.deepEqual(parseTurnUrl('turn:standard.relay.metered.ca:80?transport=tcp'), { host: 'standard.relay.metered.ca', port: 80, tls: false });
   assert.equal(parseTurnUrl('turn:standard.relay.metered.ca:80'), null, 'UDP');
@@ -136,8 +89,33 @@ test('turn urls: only TCP or TLS ones are usable through the relay', async () =>
 });
 
 test('the bundled public trackers are all HTTP(S) announce urls', async () => {
-  const { BUNDLED_TRACKERS } = await import('../public/client/public-trackers.js');
+  const { BUNDLED_TRACKERS } = await import('../public-trackers.js');
   assert.ok(BUNDLED_TRACKERS.length >= 20);
   for (const t of BUNDLED_TRACKERS) assert.match(t, /^https?:\/\/[^/]+\/announce$/);
   assert.equal(new Set(BUNDLED_TRACKERS).size, BUNDLED_TRACKERS.length);
+});
+
+test('pieces map onto files that sit end to end', async () => {
+  const { parseInfo } = await import('../torrent.js');
+  const { pieceSegments, piecesForFiles, fileProgress, safePathParts } = await import('../files.js');
+  // files of 10, 0, 25 and 5 bytes in pieces of 16: [0..16) [16..32) [32..40)
+  const files = [10, 0, 25, 5].map((length, i) => ({ length, path: [new TextEncoder().encode(`f${i}`)] }));
+  const info = parseInfo(encode({ name: 'd', 'piece length': 16, pieces: new Uint8Array(60), files }));
+  assert.deepEqual(info.files.map((f) => f.offset), [0, 10, 10, 35]);
+  assert.deepEqual(pieceSegments(info, 0), [
+    { file: 0, fileOffset: 0, pieceOffset: 0, length: 10 },
+    { file: 2, fileOffset: 0, pieceOffset: 10, length: 6 },
+  ]);
+  assert.deepEqual(pieceSegments(info, 2), [
+    { file: 2, fileOffset: 22, pieceOffset: 0, length: 3 },
+    { file: 3, fileOffset: 0, pieceOffset: 3, length: 5 },
+  ]);
+  assert.deepEqual([...piecesForFiles(info, [0])], [1, 0, 0]);
+  assert.deepEqual([...piecesForFiles(info, [2])], [1, 1, 1]);
+  assert.deepEqual([...piecesForFiles(info, [3])], [0, 0, 1]);
+  assert.deepEqual([...piecesForFiles(info, [1])], [0, 0, 0], 'an empty file needs no pieces');
+  assert.deepEqual(fileProgress(info, new Uint8Array([1, 0, 1])), [10, 0, 9, 5]);
+  assert.deepEqual(safePathParts('../a//./b\\c/..'), ['a', 'b', 'c']);
+  assert.deepEqual(safePathParts('x:y?.txt'), ['x_y_.txt']);
+  assert.deepEqual(safePathParts('..'), ['file']);
 });

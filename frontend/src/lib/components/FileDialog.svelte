@@ -6,7 +6,8 @@
   import Folder from '@lucide/svelte/icons/folder';
   import Minus from '@lucide/svelte/icons/minus';
   import { SvelteSet } from 'svelte/reactivity';
-  import { api, type FileView } from '$lib/api';
+  import type { FileView } from '$lib/api';
+  import { BROWSER_ENGINE } from '$lib/config';
   import { fmtBytes, keepHours } from '$lib/format';
   import { app, errorMessage } from '$lib/state/app.svelte';
   import { toasts } from '$lib/state/toasts.svelte';
@@ -47,11 +48,11 @@
       return;
     }
     loading = true;
-    api
+    app
       .files(hash)
-      .then((r) => {
-        files = r.files;
-        for (const f of r.files) selected.add(f.index);
+      .then((list) => {
+        files = list;
+        for (const f of list) selected.add(f.index);
       })
       .catch((err) => {
         toasts.push(errorMessage(err), 'err');
@@ -97,7 +98,8 @@
   const total = $derived(files?.length ?? 0);
   const pickedSize = $derived((files ?? []).filter((f) => selected.has(f.index)).reduce((s, f) => s + f.size, 0));
   const hours = $derived(keepHours(pickedSize, app.limits));
-  const tooBig = $derived(pickedSize > 0 && (hours === null || pickedSize > (app.limits?.maxTorrentGb ?? Infinity) * 1e9));
+  // the server caps sizes; the browser engine checks the browser's free storage when the download starts
+  const tooBig = $derived(!BROWSER_ENGINE && pickedSize > 0 && (hours === null || pickedSize > (app.limits?.maxTorrentGb ?? Infinity) * 1e9));
 
   function toggle(n: Node) {
     const all = n.leaves.every((i) => selected.has(i));
@@ -169,6 +171,8 @@
         pick at least one file
       {:else if tooBig}
         too big · max {app.limits?.maxTorrentGb ?? 20} gb per torrent
+      {:else if BROWSER_ENGINE}
+        saved in your browser until you remove it
       {:else if hours !== null}
         kept {hours}h after it finishes
       {/if}

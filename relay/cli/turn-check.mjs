@@ -30,11 +30,11 @@ import { lookup } from 'node:dns/promises';
 import net from 'node:net';
 import tls from 'node:tls';
 import { parseArgs } from 'node:util';
-import { BOOTSTRAP, Dht } from '../public/client/dht.js';
-import { Download } from '../public/client/download.js';
-import { fromHex } from '../public/client/torrent.js';
-import { TurnClient, fetchTurnServers } from '../public/client/turn.js';
-import { openTunnel } from '../public/client/tunnel.js';
+import { BOOTSTRAP, Dht } from '../../client/dht.js';
+import { Download } from '../../client/download.js';
+import { fromHex } from '../../client/torrent.js';
+import { TurnClient, fetchTurnServers } from '../../client/turn.js';
+import { openTunnel } from '../../client/tunnel.js';
 
 const { values: o } = parseArgs({
   options: {

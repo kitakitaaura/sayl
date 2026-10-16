@@ -2,21 +2,24 @@
   import Check from '@lucide/svelte/icons/check';
   import Gate from '$lib/components/Gate.svelte';
   import Omnibox from '$lib/components/Omnibox.svelte';
+  import RelaySetup from '$lib/components/RelaySetup.svelte';
   import TorrentCard from '$lib/components/TorrentCard.svelte';
   import Wordmark from '$lib/components/Wordmark.svelte';
-  import { ABUSE_EMAIL, APP_NAME } from '$lib/config';
+  import { ABUSE_EMAIL, APP_NAME, BROWSER_ENGINE } from '$lib/config';
   import { app } from '$lib/state/app.svelte';
   import { settings } from '$lib/state/settings.svelte';
 
   let fileInput: HTMLInputElement;
 
-  const chips = [
+  const allChips = [
     { key: 'sequential', label: 'sequential' },
     { key: 'seed', label: 'seed after' },
     { key: 'select', label: 'select files' },
   ] as const;
+  // the browser engine doesn't upload yet, so it can't seed
+  const chips = BROWSER_ENGINE ? allChips.filter((c) => c.key !== 'seed') : allChips;
 
-  function toggle(key: (typeof chips)[number]['key']) {
+  function toggle(key: (typeof allChips)[number]['key']) {
     app.chips[key] = !app.chips[key];
     if (key === 'select') settings.set('selectFiles', app.chips.select);
   }
@@ -38,6 +41,10 @@
     <Wordmark />
     {#if app.status === 'gate'}
       <Gate />
+    {:else if app.status === 'setup'}
+      <RelaySetup />
+    {:else if app.status === 'unsupported'}
+      <p class="status" role="alert">this browser can’t store downloads. use a current version of chrome, edge, firefox or safari.</p>
     {:else if app.status === 'banned'}
       <p class="status" role="alert">access from your network has been blocked. if you think this is a mistake, contact <span class="mono">{ABUSE_EMAIL}</span>.</p>
     {:else}

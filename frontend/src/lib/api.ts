@@ -27,6 +27,8 @@ export interface TorrentView {
   addedAt: number;
   completedAt: number | null;
   seedEndsAt: number | null;
+  /** browser engine only: what went wrong, in words */
+  error?: string | null;
 }
 
 export interface FileView {

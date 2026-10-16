@@ -1,6 +1,8 @@
-# Deploying Sayl
+# Deploying the server version of Sayl
 
-This puts Sayl online for free:
+This guide is for the **self-hosted server version**. The default, browser version needs no server: see *Put it online* in the [README](../README.md) and [relay/README.md](../relay/README.md).
+
+This puts the server version online:
 
 | Address | What runs there |
 |---|---|
@@ -151,6 +153,7 @@ The first request to `sayl-dl` can take half a minute while Caddy gets its certi
 
    | Variable | Value |
    |---|---|
+   | `ENGINE` | `server` |
    | `API_URL` | `https://sayl-api.kitaaura.com` |
    | `SITE_URL` | `https://sayl.kitaaura.com` |
    | `TURNSTILE_SITE_KEY` | the site key from step 4c, or leave it out |

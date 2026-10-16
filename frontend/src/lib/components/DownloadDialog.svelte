@@ -2,7 +2,8 @@
   import Archive from '@lucide/svelte/icons/archive';
   import Download from '@lucide/svelte/icons/download';
   import File from '@lucide/svelte/icons/file';
-  import { api, type Links } from '$lib/api';
+  import type { Links } from '$lib/api';
+  import { BROWSER_ENGINE } from '$lib/config';
   import { fmtBytes } from '$lib/format';
   import { app, errorMessage } from '$lib/state/app.svelte';
   import { toasts } from '$lib/state/toasts.svelte';
@@ -15,7 +16,7 @@
 
   $effect(() => {
     const h = hash;
-    api
+    app
       .links(h)
       .then((l) => (links = l))
       .catch((err) => {
@@ -25,6 +26,19 @@
   });
 
   const name = (path: string) => path.split('/').pop() ?? path;
+
+  /** Browser engine: saves every file, one after another (the browser may ask to allow several downloads). */
+  async function saveAll() {
+    if (!links) return;
+    for (const f of links.files) {
+      const a = document.createElement('a');
+      a.href = f.url;
+      a.download = name(f.path);
+      a.click();
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    app.downloaded(hash);
+  }
 </script>
 
 <Dialog title="download" subtitle={torrent?.name ?? ''} {onclose}>
@@ -39,7 +53,7 @@
           <File class="ft" size={15} aria-hidden="true" />
           <span class="nm" title={f.path}>{name(f.path)}</span>
           <span class="sz tabular">{fmtBytes(f.size)}</span>
-          <a class="icon-btn" href={f.url} rel="noopener" aria-label="download {name(f.path)}" onclick={() => app.downloaded(hash)}>
+          <a class="icon-btn" href={f.url} rel="noopener" download={BROWSER_ENGINE ? name(f.path) : undefined} aria-label="download {name(f.path)}" onclick={() => app.downloaded(hash)}>
             <Download size={16} aria-hidden="true" />
           </a>
         </div>
@@ -48,7 +62,14 @@
   </div>
 
   {#snippet footer()}
-    <span class="note">the zip streams right away. links last 6 hours.</span>
+    {#if BROWSER_ENGINE}
+      <span class="note">files save straight from your browser's storage.</span>
+      {#if links && links.files.length > 1}
+        <button type="button" class="btn primary" data-autofocus onclick={saveAll}><Archive size={16} aria-hidden="true" />save all</button>
+      {/if}
+    {:else}
+      <span class="note">the zip streams right away. links last 6 hours.</span>
+    {/if}
     {#if links?.zip}
       <a class="btn primary" href={links.zip.url} rel="noopener" data-autofocus onclick={() => app.downloaded(hash)}>
         <Archive size={16} aria-hidden="true" />download all (.zip)

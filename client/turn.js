@@ -63,7 +63,9 @@ export async function fetchTurnServers(relay) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new TurnError(body.error ?? `couldn't get TURN logins (${res.status})`, res.status === 503 ? 'off' : res.status);
   const rank = (s) => (/^turns:.*:443\b/.test(s.url) ? 0 : /^turns:/.test(s.url) ? 1 : 2);
-  return (body.servers ?? []).filter((s) => parseTurnUrl(s.url)).sort((a, b) => rank(a) - rank(b));
+  const servers = (body.servers ?? []).filter((s) => parseTurnUrl(s.url)).sort((a, b) => rank(a) - rank(b));
+  if (!servers.length) throw new TurnError(body.error ?? 'the relay has no TURN server', 'off');
+  return servers;
 }
 
 /** Builds a STUN message. attrs: [[type, Uint8Array]] */

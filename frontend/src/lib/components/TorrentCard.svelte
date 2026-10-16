@@ -9,7 +9,8 @@
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Users from '@lucide/svelte/icons/users';
-  import { api, type TorrentView } from '$lib/api';
+  import type { TorrentView } from '$lib/api';
+  import { BROWSER_ENGINE } from '$lib/config';
   import { fmtBytes, fmtDur, fmtSpeed, keepHours } from '$lib/format';
   import { app, errorMessage } from '$lib/state/app.svelte';
   import { settings } from '$lib/state/settings.svelte';
@@ -52,7 +53,7 @@
 
   async function download() {
     try {
-      const links = await api.links(t.hash);
+      const links = await app.links(t.hash);
       if (links.files.length > 1) {
         ui.open({ kind: 'download', hash: t.hash });
         return;
@@ -66,6 +67,8 @@
       const a = document.createElement('a');
       a.href = f.url;
       a.rel = 'noopener';
+      // the server's links say "attachment" themselves; the browser engine's need the file name here
+      if (f.url.startsWith('blob:')) a.download = f.path.split('/').pop() ?? f.path;
       a.click();
       app.downloaded(t.hash);
     } catch (err) {
@@ -91,7 +94,7 @@
     <div class="stats tabular">
       {#if t.state === 'downloading' || t.state === 'stalled' || t.state === 'queued'}
         <span title="download speed"><ArrowDown size={13} aria-hidden="true" /><span class="sr">download speed: </span>{fmtSpeed(t.dlSpeed)}</span>
-        <span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>
+        {#if !BROWSER_ENGINE}<span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>{/if}
         <span title="time left"><Clock size={13} aria-hidden="true" /><span class="sr">time left: </span>{t.eta === null ? '—' : fmtDur(t.eta)}</span>
         <span title="peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
       {:else if t.state === 'seeding'}
@@ -108,7 +111,9 @@
       {:else if t.state === 'checking'}
         <span>checking pieces…</span>
       {:else if t.state === 'error'}
-        <span>something went wrong with this torrent. try a recheck, or remove it.</span>
+        <span>{t.error ?? 'something went wrong with this torrent. try a recheck, or remove it.'}</span>
+      {:else if BROWSER_ENGINE}
+        <span>ready to save</span>
       {:else}
         <span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span><span>ready to download</span>
       {/if}
@@ -122,6 +127,8 @@
       {:else if t.state !== 'metadata'}
         {#if t.state === 'paused'}
           <button type="button" class="icon-btn" title="resume" aria-label="resume" onclick={() => app.act(t.hash, 'resume')}><Play size={16} aria-hidden="true" /></button>
+        {:else if t.state === 'error'}
+          <button type="button" class="icon-btn" title="try again" aria-label="try again" onclick={() => app.act(t.hash, 'resume')}><Play size={16} aria-hidden="true" /></button>
         {:else}
           <button type="button" class="icon-btn" title="pause" aria-label="pause" disabled={!canPause} onclick={() => app.act(t.hash, 'pause')}><Pause size={16} aria-hidden="true" /></button>
         {/if}

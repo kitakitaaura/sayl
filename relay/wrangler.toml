@@ -3,10 +3,6 @@ main = "worker/index.js"
 compatibility_date = "2026-09-01"
 workers_dev = true
 
-# The test page and the browser client, served from the same address as the relay.
-[assets]
-directory = "public"
-
 [[durable_objects.bindings]]
 name = "SESSIONS"
 class_name = "Session"

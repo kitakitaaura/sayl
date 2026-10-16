@@ -1,10 +1,64 @@
 # Sayl
 
-**Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents on a server and hands you the files over HTTPS. Paste a magnet link or drop a `.torrent`, pick files, download them in the browser.
+**Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents right in your browser. Paste a magnet link or drop a `.torrent`, pick files, save them. Nothing to install, no server holding anyone's files, and free for everyone.
 
-**To put it online, follow [docs/DEPLOY.md](docs/DEPLOY.md).** To try it on your own computer, see *Run it locally* below.
+There are two ways to run it:
+
+- **In the browser** (the default). The BitTorrent client runs in the page, and each person's own free Cloudflare Worker, the **relay**, connects it to peers. The website is static files on Cloudflare Pages.
+- **On a server** (self-hosted). The original version: qBittorrent on a VPS downloads for everyone and hands out the files over HTTPS. See *The server version* below.
 
 ## How it fits together
+
+```
+sayl.kitaaura.com          Cloudflare Pages: the website, plain static files
+  └─ in each visitor's browser:
+       BitTorrent client (client/)  ── WSS ──>  their relay (relay/), a Worker on their own Cloudflare account
+       files in the browser's private storage (OPFS), saved to disk when they choose
+                                                   └─ TCP ──> peers and trackers
+                                                   └─ TURN ──> the DHT, only as a last resort
+```
+
+Finding peers, in order: the torrent's own trackers and about 25 public HTTP trackers, then PEX, and only when that finds no one, the DHT through a TURN server. See [relay/README.md](relay/README.md) for the relay, the DHT setup, what the relay agrees to carry, and measured speeds (17–20 MB/s on a home connection).
+
+## Put it online
+
+1. **The website.** Cloudflare Pages → *Connect to Git* → this repo. Root directory `frontend`, build command `npm run build`, output directory `build`. Variables:
+
+   | Variable | Example | Default |
+   |---|---|---|
+   | `ENGINE` | `browser` | `browser` when `API_URL` is not set |
+   | `SITE_URL` | `https://sayl.kitaaura.com` | `https://sayl.kitaaura.com` |
+   | `APP_NAME` | `Sayl` | `name` in `brand.json` |
+   | `ABUSE_EMAIL` | `abuse@kitaaura.com` | `abuseEmail` in `brand.json` |
+
+   A site built with `API_URL` set uses the server version unless `ENGINE=browser`.
+
+2. **A relay.** Each person sets up their own, following [relay/README.md](relay/README.md) (about five minutes, free). The site asks for its address on the first visit.
+
+Downloads stay in the visitor's browser storage until they remove them. Chrome and Edge give a site up to about 60% of the free disk; Firefox and Safari give less.
+
+## Run it locally
+
+```sh
+cd relay && npm install && npx wrangler dev        # the relay on http://localhost:8787
+cd frontend && npm install && npm run dev          # the site on http://localhost:5173
+```
+
+Open the site and enter `http://localhost:8787` as the relay.
+
+## Repo layout
+
+| Path | What it is |
+|---|---|
+| `frontend/` | The SvelteKit website, for Cloudflare Pages. `src/lib/browser/` is the browser engine. |
+| `client/` | The BitTorrent client the website runs: peer protocol, metadata from magnets, PEX, HTTP trackers, the DHT over TURN, piece picking and checks. Plain JS, also runs in Node. |
+| `relay/` | The relay Worker, its command-line tools, and the end-to-end tests. |
+| `brand.json` | The product name. Change it here (or set `APP_NAME`) to rename everything. |
+| `backend/`, `deploy/`, `docker-compose.yml`, `.env.example` | The server version. |
+
+## The server version
+
+Self-hosted on a VPS: qBittorrent downloads for everyone, and the site hands out the files over HTTPS. Build the website with `API_URL` set (or `ENGINE=server`). [docs/DEPLOY.md](docs/DEPLOY.md) is the full guide.
 
 ```
 browser ──> sayl.kitaaura.com      Cloudflare Pages (static SvelteKit site)
@@ -20,19 +74,7 @@ VPS (Oracle Cloud Always Free, Docker):
 
 Downloads skip Cloudflare's proxy on purpose: serving large files through the free CDN goes against Cloudflare's terms.
 
-## Repo layout
-
-| Path | What it is |
-|---|---|
-| `brand.json` | The product name. Change it here (or set `APP_NAME`) to rename everything. |
-| `docker-compose.yml` | The whole VPS stack. |
-| `.env.example` | Every setting and secret, with comments. |
-| `backend/` | Fastify API (TypeScript). |
-| `frontend/` | SvelteKit site for Cloudflare Pages. |
-| `deploy/qbit-init/` | Writes qBittorrent's login and port before it starts. |
-| `deploy/caddy/` | Caddy config for the download domain. |
-
-## Run it locally
+### Run it locally
 
 Needs Docker and Node.js 22.
 
@@ -52,13 +94,14 @@ For downloads to work locally, also set `DL_PUBLIC_URL=http://localhost:8081` an
 Frontend (talks to the API on `localhost:8080`):
 
 ```sh
-cd frontend && npm install && npm run dev    # http://localhost:5173
+cd frontend && npm install && ENGINE=server npm run dev    # http://localhost:5173
 ```
 
-The site is plain static files (SvelteKit, every page prerendered). Build-time settings, set in Cloudflare Pages under *Settings → Variables*:
+The site is plain static files (SvelteKit, every page prerendered). For the server version, set these in Cloudflare Pages under *Settings → Variables*:
 
 | Variable | Example | Default |
 |---|---|---|
+| `ENGINE` | `server` | `server` when `API_URL` is set |
 | `API_URL` | `https://sayl-api.kitaaura.com` | `http://localhost:8080` |
 | `SITE_URL` | `https://sayl.kitaaura.com` | `https://sayl.kitaaura.com` |
 | `APP_NAME` | `Sayl` | `name` in `brand.json` |
@@ -67,7 +110,7 @@ The site is plain static files (SvelteKit, every page prerendered). Build-time s
 
 Fonts (IBM Plex Mono, Inter) are bundled from `@fontsource`, icons are [Lucide](https://lucide.dev). Theme, motion and download preferences stay in the browser's localStorage.
 
-## Deploying
+### Deploying
 
 [docs/DEPLOY.md](docs/DEPLOY.md) walks through everything: the Oracle VM, its two firewalls, Docker, the Cloudflare tunnel, DNS, Turnstile, Pages, testing and day-to-day running.
 
@@ -79,7 +122,7 @@ node scripts/smoke.mjs https://sayl-api.kitaaura.com [--code <access code>] [--f
 
 It adds the current Debian netinst ISO, waits for the server to download it from real peers, checks the download link (and with `--full`, the whole file against Debian's SHA-256), then removes it.
 
-### qBittorrent settings
+#### qBittorrent settings
 
 The backend applies these on every start and reads them back; `sayl-admin status` shows any difference.
 
@@ -95,7 +138,7 @@ The backend applies these on every start and reads them back; `sayl-admin status
 | Web UI | port 8080 on the internal Docker network only, PBKDF2 password from `.env` |
 | SSRF mitigation, block peers on ports below 1024 | on |
 
-## API
+### API
 
 All routes are under `https://sayl-api.kitaaura.com`. The browser sends the session cookie (`credentials: 'include'`); requests that change something must come from `FRONTEND_ORIGIN`. Errors look like `{"error": "not_found", "message": "that torrent isn't in your list"}`.
 
@@ -120,7 +163,7 @@ All routes are under `https://sayl-api.kitaaura.com`. The browser sends the sess
 
 **Downloads** come from `https://sayl-dl.kitaaura.com/dl/<token>/<name>`. Links check ownership again on every request, support byte ranges (resumable downloads), and the zip streams with a known size, so browsers show progress.
 
-## Limits and cleanup
+### Limits and cleanup
 
 All of these are in `.env`.
 
@@ -139,7 +182,7 @@ Space is counted when files are picked, not as they download, so many half-finis
 
 **Access:** set `ACCESS_CODE` to require a code before anyone gets a session (the beta), and `TURNSTILE_SECRET_KEY` plus the Pages variable `TURNSTILE_SITE_KEY` for the Cloudflare Turnstile captcha. Leave either empty to turn it off. Both are checked once, when a session starts.
 
-## Admin
+### Admin
 
 There is no admin website or endpoint. On the VPS:
 
@@ -158,10 +201,14 @@ For a takedown notice: find the torrent (`list`), then `block` it. For repeat ab
 ## Tests
 
 ```sh
-cd backend && npm install && npm test
+cd client && npm test                      # bencode, magnets, trackers, piece-to-file mapping, TURN messages
+cd relay && npm test                       # what the relay agrees to carry
+cd relay && node test/local.mjs            # relay + client against a real qBittorrent (Docker)
+cd relay && node test/website.mjs          # the website in browser mode, clicked through in Chromium
+cd backend && npm install && npm test      # the server version
 ```
 
-The tests run against an in-memory stand-in for qBittorrent's API. They cover sessions, cross-site protection, isolation between users (every route, shared torrents, tag mismatches), file selection, seeding limits, `.torrent` validation, private-address blocking for pasted URLs, signed links, byte ranges, zips, path traversal, quotas (per session, per IP, server-wide, disk), retention and stall cleanup, orphans, the blocklist, IP bans, the access code, the captcha and rate limits.
+The server version's tests run against an in-memory stand-in for qBittorrent's API. They cover sessions, cross-site protection, isolation between users (every route, shared torrents, tag mismatches), file selection, seeding limits, `.torrent` validation, private-address blocking for pasted URLs, signed links, byte ranges, zips, path traversal, quotas (per session, per IP, server-wide, disk), retention and stall cleanup, orphans, the blocklist, IP bans, the access code, the captcha and rate limits.
 
 ## License
 

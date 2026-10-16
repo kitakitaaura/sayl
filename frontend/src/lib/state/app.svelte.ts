@@ -1,10 +1,16 @@
 /**
- * The live app state: session, limits and the user's torrents, kept current
- * over server-sent events.
+ * The live app state: session, limits and the user's torrents.
+ *
+ * With the server engine they come from the API, kept current over
+ * server-sent events. With the browser engine they run in this tab
+ * (see $lib/browser/engine).
  */
 import { browser } from '$app/environment';
-import { api, ApiError, EVENTS_URL, type Limits, type TorrentView } from '$lib/api';
-import { APP_NAME } from '$lib/config';
+import { api, ApiError, EVENTS_URL, type FileView, type Limits, type Links, type TorrentView } from '$lib/api';
+import { BrowserEngine, EngineError } from '$lib/browser/engine';
+import { relayConfig } from '$lib/browser/relay.svelte';
+import { storageSupported } from '$lib/browser/storage';
+import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
 import { settings } from './settings.svelte';
 import { toasts } from './toasts.svelte';
 import { ui, type Intent } from './ui.svelte';
@@ -12,11 +18,14 @@ import { ui, type Intent } from './ui.svelte';
 const HIDDEN_KEY = 'sayl.hidden';
 
 export const errorMessage = (err: unknown) =>
-  err instanceof ApiError ? err.message : 'something went wrong. try again.';
+  err instanceof ApiError || err instanceof EngineError ? err.message : 'something went wrong. try again.';
 
 class App {
-  /** 'loading' until the session and first list arrive; 'gate' while an access code or captcha is needed */
-  status = $state<'loading' | 'gate' | 'ready' | 'offline' | 'banned'>('loading');
+  /**
+   * 'loading' until the session and first list arrive; 'gate' while an access code or captcha is needed.
+   * Browser engine: 'setup' until a relay is set, 'unsupported' if this browser can't store downloads.
+   */
+  status = $state<'loading' | 'gate' | 'ready' | 'offline' | 'banned' | 'setup' | 'unsupported'>('loading');
   access = $state<{ code: boolean; captcha: boolean }>({ code: false, captcha: false });
   limits = $state<Limits | null>(null);
   torrents = $state<TorrentView[]>([]);
@@ -28,7 +37,8 @@ class App {
 
   chips = $state({
     sequential: settings.prefs.sequentialDefault,
-    seed: settings.prefs.seedDefault,
+    // the browser engine doesn't upload yet
+    seed: BROWSER_ENGINE ? false : settings.prefs.seedDefault,
     select: settings.prefs.selectFiles,
   });
 
@@ -36,6 +46,7 @@ class App {
   private pending = new Map<string, Intent>();
   private es: EventSource | null = null;
   private started = false;
+  private engine: BrowserEngine | null = null;
 
   visible = $derived(this.torrents.filter((t) => !this.hidden.includes(t.hash)));
 
@@ -48,7 +59,34 @@ class App {
       this.hidden = [];
     }
     setInterval(() => (this.now = Date.now()), 1000);
-    await this.connect();
+    if (BROWSER_ENGINE) await this.initBrowser();
+    else await this.connect();
+  }
+
+  private async initBrowser(): Promise<void> {
+    if (!storageSupported()) {
+      this.status = 'unsupported';
+      return;
+    }
+    this.engine = new BrowserEngine((views) => {
+      this.torrents = views;
+      void this.runPending();
+    });
+    await this.engine.load();
+    this.status = relayConfig.ready ? 'ready' : 'setup';
+    window.addEventListener('beforeunload', (e) => {
+      // closing the tab stops the downloads; they pick up again on the next visit
+      if (this.engine?.busy) e.preventDefault();
+    });
+    // progress is saved every few seconds; save the last bit too
+    window.addEventListener('pagehide', () => this.engine?.flush());
+  }
+
+  /** The relay settings changed (browser engine). */
+  relaySaved(): void {
+    if (!this.engine) return;
+    this.status = relayConfig.ready ? 'ready' : 'setup';
+    this.engine.relayChanged();
   }
 
   private async connect(): Promise<void> {
@@ -130,7 +168,9 @@ class App {
     toasts.push(`added ${t.name}`, 'ok');
     if (t.state !== 'metadata' && t.state !== 'selecting') return;
     if (this.chips.select) ui.open({ kind: 'files', hash: t.hash, intent: this.intent() });
-    else {
+    else if (this.engine) {
+      // the engine starts every file itself once the metadata arrives
+    } else {
       this.pending.set(t.hash, this.intent());
       void this.runPending();
     }
@@ -147,7 +187,7 @@ class App {
       if (t.state !== 'selecting') continue;
       this.pending.delete(hash);
       try {
-        const { files } = await api.files(hash);
+        const files = await this.files(hash);
         const r = await api.select(hash, { files: files.map((f) => f.index), ...intent, ratioLimit: settings.prefs.ratio });
         this.upsert(r.torrent);
       } catch (err) {
@@ -164,7 +204,14 @@ class App {
     }
     this.busy = true;
     try {
-      this.afterAdd((await api.add(s)).torrent);
+      const known = this.engine?.has(this.hashOf(s) ?? '');
+      const t = this.engine ? await this.engine.add(s, this.autoSelect()) : (await api.add(s)).torrent;
+      if (known) {
+        toasts.push(`${t.name} is already in your list`, 'info');
+        this.unhide(t.hash);
+        return true;
+      }
+      this.afterAdd(t);
       return true;
     } catch (err) {
       toasts.push(errorMessage(err), 'err');
@@ -186,6 +233,13 @@ class App {
     }
     this.busy = true;
     try {
+      if (this.engine) {
+        const before = new Set(this.torrents.map((t) => t.hash));
+        const t = await this.engine.addTorrent(new Uint8Array(await file.arrayBuffer()), this.autoSelect());
+        if (before.has(t.hash)) toasts.push(`${t.name} is already in your list`, 'info');
+        else this.afterAdd(t);
+        return;
+      }
       this.afterAdd((await api.upload(file)).torrent);
     } catch (err) {
       toasts.push(errorMessage(err), 'err');
@@ -194,9 +248,31 @@ class App {
     }
   }
 
+  /** For the browser engine: start every file once the metadata is in, unless the user picks them. */
+  private autoSelect(): { sequential: boolean } | null {
+    return this.chips.select ? null : { sequential: this.chips.sequential };
+  }
+
+  private hashOf(source: string): string | null {
+    const m = /xt=urn:btih:([0-9a-f]{40})/i.exec(source);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  /** The torrent's file list. */
+  async files(hash: string): Promise<FileView[]> {
+    return this.engine ? this.engine.files(hash) : (await api.files(hash)).files;
+  }
+
+  /** Links to save the finished files. */
+  async links(hash: string): Promise<Links> {
+    return this.engine ? this.engine.links(hash) : api.links(hash);
+  }
+
   async select(hash: string, files: number[], intent: Intent): Promise<boolean> {
     try {
-      const r = await api.select(hash, { files, ...intent, ratioLimit: settings.prefs.ratio });
+      const r = this.engine
+        ? { torrent: await this.engine.select(hash, files, { sequential: intent.sequential }) }
+        : await api.select(hash, { files, ...intent, ratioLimit: settings.prefs.ratio });
       this.upsert(r.torrent);
       return true;
     } catch (err) {
@@ -207,8 +283,8 @@ class App {
 
   async act(hash: string, action: 'pause' | 'resume' | 'recheck' | 'stop-seeding'): Promise<void> {
     try {
-      this.upsert((await api.action(hash, action)).torrent);
       if (action === 'recheck') toasts.push('checking pieces', 'info');
+      this.upsert(this.engine ? await this.engine.action(hash, action) : (await api.action(hash, action)).torrent);
     } catch (err) {
       toasts.push(errorMessage(err), 'err');
     }
@@ -217,7 +293,8 @@ class App {
   async remove(hash: string): Promise<void> {
     const name = this.find(hash)?.name ?? 'torrent';
     try {
-      await api.remove(hash);
+      if (this.engine) await this.engine.remove(hash);
+      else await api.remove(hash);
       this.torrents = this.torrents.filter((t) => t.hash !== hash);
       this.pending.delete(hash);
       toasts.push(`deleted ${name}`, 'ok');
@@ -228,7 +305,7 @@ class App {
 
   async removeAll(): Promise<void> {
     try {
-      const { removed } = await api.removeAll();
+      const { removed } = this.engine ? { removed: await this.engine.removeAll() } : await api.removeAll();
       this.torrents = [];
       this.pending.clear();
       toasts.push(removed ? `deleted ${removed} torrent${removed === 1 ? '' : 's'}` : 'nothing to clear', 'ok');
@@ -253,7 +330,8 @@ class App {
 
   /** Called after the user starts a download; with auto-clear on, the torrent leaves the list. */
   downloaded(hash: string): void {
-    if (!settings.prefs.autoClear) return;
+    // the browser engine keeps files in browser storage, so hiding a torrent would hide space it still uses
+    if (this.engine || !settings.prefs.autoClear) return;
     if (!this.hidden.includes(hash)) this.setHidden([...this.hidden, hash]);
     toasts.push('cleared from your list. files still delete on schedule.', 'info');
   }

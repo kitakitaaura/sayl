@@ -11,7 +11,7 @@
  *   GET /turn-credentials[?token=<t>]
  *
  * Gives the browser a short-lived TURN login so it can reach the DHT (see
- * turnCredentials below). 503 when no TURN account is set up.
+ * turnCredentials below). No TURN account set up: an empty list and the reason.
  *
  * via=worker (default) relays inside the Worker request itself. via=do hands
  * the WebSocket to a Durable Object chosen by `session`, so one browser
@@ -25,9 +25,9 @@ import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceReques
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/health') return Response.json({ status: 'ok' });
+    if (url.pathname === '/health') return Response.json({ status: 'ok' }, { headers: CORS });
     if (url.pathname === '/turn-credentials') return turnCredentials(url, env);
-    if (url.pathname !== '/tunnel') return env.ASSETS ? env.ASSETS.fetch(request) : new Response('not found', { status: 404 });
+    if (url.pathname !== '/tunnel') return new Response('not found', { status: 404 });
 
     const refused = checkRequest(request, url, env);
     if (refused) return refused;
@@ -60,8 +60,11 @@ export class Session extends DurableObject {
  */
 let meteredCache = null; // { servers, expiresAt }, shared by requests on this isolate
 
+/** The Sayl website runs on another origin; it reads /health and /turn-credentials with the token. */
+const CORS = { 'access-control-allow-origin': '*' };
+
 async function turnCredentials(url, env) {
-  const json = (body, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+  const json = (body, status = 200) => Response.json(body, { status, headers: { ...CORS, 'cache-control': 'no-store' } });
   if (env.ACCESS_TOKEN && url.searchParams.get('token') !== env.ACCESS_TOKEN) return json({ error: 'bad token' }, 403);
   if (env.METERED_APP && env.METERED_SECRET_KEY) {
     if (meteredCache && meteredCache.expiresAt - Date.now() > 15 * 60_000) return json({ servers: meteredCache.servers });
@@ -87,7 +90,7 @@ async function turnCredentials(url, env) {
     const servers = env.TURN_URLS.split(',').map((u) => ({ url: u.trim(), username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL }));
     return json({ servers });
   }
-  return json({ error: 'the DHT is not set up on this relay' }, 503);
+  return json({ servers: [], error: 'the DHT is not set up on this relay' });
 }
 
 function checkRequest(request, url, env) {

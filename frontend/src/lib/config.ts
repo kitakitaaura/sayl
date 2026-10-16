@@ -7,4 +7,9 @@ export const API_URL = __API_URL__.replace(/\/+$/, '');
 export const SITE_URL = __SITE_URL__.replace(/\/+$/, '');
 export const ABUSE_EMAIL = __ABUSE_EMAIL__;
 export const TURNSTILE_SITE_KEY = __TURNSTILE_SITE_KEY__;
-export const DESCRIPTION = `${APP_NAME} downloads torrents on a server and hands you the files over https. paste a magnet link or drop a .torrent, pick files, download.`;
+/** 'browser': torrents run in the visitor's browser through their relay. 'server': a self-hosted backend runs them. */
+export const ENGINE = __ENGINE__;
+export const BROWSER_ENGINE = ENGINE === 'browser';
+export const DESCRIPTION = BROWSER_ENGINE
+  ? `${APP_NAME} downloads torrents right in your browser. paste a magnet link or drop a .torrent, pick files, save them. free, no install.`
+  : `${APP_NAME} downloads torrents on a server and hands you the files over https. paste a magnet link or drop a .torrent, pick files, download.`;

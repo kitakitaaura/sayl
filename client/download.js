@@ -6,9 +6,17 @@
  *   d.onprogress = (stats) => …;
  *   await d.start();          // resolves when done (or stopped)
  *
- * source: { infoHash (hex), trackers, peers: ['host:port'], info? }
- * sink:   { open(info), write(offset, bytes), close() } — writes may arrive in any order
- * dht:    { getTurn: async () => [{ url, username, credential }], bootstrap? } — optional
+ * source:     { infoHash (hex), trackers, peers: ['host:port'], info? }
+ * sink:       { open(info), write(offset, bytes, piece), close() } — writes may arrive in any order
+ * dht:        { getTurn: async () => [{ url, username, credential }], bootstrap? } — optional
+ * wanted:     'all', or a Uint8Array with 1 for each piece to download, or null to
+ *             wait (peers stay connected) until select() is called — e.g. while
+ *             the user picks files once the metadata is in
+ * have:       a Uint8Array with 1 for pieces already verified on disk (resuming)
+ * sequential: fetch pieces in order instead of rarest-first-ish random order
+ *
+ * Callbacks: onmetadata(info) once the info dict is known, onpiece(piece)
+ * after each verified piece is written, onprogress(stats) every second.
  *
  * Finding peers, in order: the torrent's own trackers and the public HTTP
  * trackers (right away), then PEX from connected peers, and only if all of
@@ -35,7 +43,20 @@ const DHT_RETRY_MS = 10 * 60_000;
 let dhtOffUntil = 0;
 
 export class Download {
-  constructor({ relay, source, sink, maxPeers = 40, pipeline = 64, limitBytes = Infinity, extraTrackers = true, dht = null, log = () => {} }) {
+  constructor({
+    relay,
+    source,
+    sink,
+    maxPeers = 40,
+    pipeline = 64,
+    limitBytes = Infinity,
+    extraTrackers = true,
+    dht = null,
+    wanted = 'all',
+    have = null,
+    sequential = false,
+    log = () => {},
+  }) {
     this.relay = relay;
     this.source = source;
     this.sink = sink;
@@ -43,6 +64,10 @@ export class Download {
     this.pipeline = pipeline;
     this.limitBytes = limitBytes;
     this.log = log;
+    this.wanted = null; // Uint8Array per piece once known
+    this.wantedOption = wanted;
+    this.haveOption = have;
+    this.sequential = sequential;
     this.infoHash = fromHex(source.infoHash);
     this.peerId = new TextEncoder().encode(`-SY0001-${Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('')}`);
     this.extraTrackers = extraTrackers;
@@ -81,6 +106,38 @@ export class Download {
     this.remaining = 0;
     this.stopped = false;
     this.onprogress = null;
+    this.onmetadata = null;
+    this.onpiece = null;
+  }
+
+  /** Verified pieces (1) so far, or null before the metadata is known. */
+  get have() {
+    return this.done ? this.done.map((v) => (v === 1 ? 1 : 0)) : null;
+  }
+
+  /** Chooses the pieces to download (1 = download); starts the download if it was waiting. */
+  select(wanted) {
+    if (!this.info) throw new Error('the metadata is not known yet');
+    if (!(wanted instanceof Uint8Array) || wanted.length !== this.info.pieceCount) throw new Error('wanted must have one entry per piece');
+    this.wanted = wanted;
+    this.#recount();
+    if (this.remaining === 0) this.#complete();
+    else for (const peer of this.peers) this.#fill(peer);
+  }
+
+  set sequentialMode(on) {
+    this.sequential = !!on;
+  }
+
+  #recount() {
+    let n = 0;
+    if (this.wanted) for (let i = 0; i < this.info.pieceCount; i++) if (this.wanted[i] && this.done[i] !== 1) n++;
+    this.remaining = n;
+  }
+
+  #complete() {
+    this.stats.finishedAt = Date.now();
+    this.stop('complete');
   }
 
   async start() {
@@ -114,7 +171,7 @@ export class Download {
     return {
       name: this.info?.name ?? this.source.name ?? null,
       size: this.info?.length ?? null,
-      complete: this.remaining === 0 && !!this.info,
+      complete: this.remaining === 0 && !!this.info && !!this.wanted,
       stopReason: this.stopReason ?? null,
       metadataSeconds: s.metadataAt ? (s.metadataAt - s.started) / 1000 : null,
       firstPieceSeconds: s.firstPieceAt ? (s.firstPieceAt - s.started) / 1000 : null,
@@ -281,7 +338,11 @@ export class Download {
     this.lastProgressAt = Date.now();
     this.lastVerified = s.verifiedBytes;
     let unchoked = 0;
-    for (const p of this.peers) if (!p.wire.peerChoking) unchoked++;
+    let seeds = 0;
+    for (const p of this.peers) {
+      if (!p.wire.peerChoking) unchoked++;
+      if (this.info && p.haveCount === this.info.pieceCount) seeds++;
+    }
     return {
       name: this.info?.name ?? null,
       size: this.info?.length ?? null,
@@ -290,6 +351,7 @@ export class Download {
       peersKnown: this.known.size,
       peersConnected: this.peers.size,
       peersUnchoked: unchoked,
+      seeds,
       hasMetadata: !!this.info,
       fraction: this.info ? s.verifiedBytes / this.info.length : 0,
     };
@@ -324,6 +386,7 @@ export class Download {
       key,
       inflight: new Set(), // "piece:block"
       have: null, // Uint8Array per piece, once we know the piece count
+      haveCount: 0,
       pendingBitfield: null,
       pendingHaves: [],
       lastBlockAt: Date.now(),
@@ -426,7 +489,13 @@ export class Download {
     if (this.info) return;
     this.info = info;
     this.done = new Uint8Array(info.pieceCount);
-    this.remaining = info.pieceCount;
+    const have = this.haveOption;
+    if (have) for (let i = 0; i < info.pieceCount; i++) if (have[i]) this.done[i] = 1;
+    const w = this.wantedOption;
+    if (w === 'all') this.wanted = new Uint8Array(info.pieceCount).fill(1);
+    else if (w instanceof Uint8Array && w.length === info.pieceCount) this.wanted = w;
+    else this.wanted = null;
+    this.#recount();
     this.stats.metadataAt = Date.now();
     this.log(`metadata: ${info.name}, ${info.files.length} file(s), ${(info.length / 1e6).toFixed(1)} MB, ${info.pieceCount} pieces of ${info.pieceLength / 1024} KiB`);
     try {
@@ -436,6 +505,8 @@ export class Download {
       return;
     }
     for (const peer of this.peers) this.#applyHaves(peer);
+    this.onmetadata?.(info);
+    if (this.wanted && this.remaining === 0) this.#complete();
   }
 
   #applyHaves(peer) {
@@ -446,6 +517,7 @@ export class Download {
       for (let i = 0; i < this.info.pieceCount; i++) if (bf[i >> 3] & (0x80 >> (i & 7))) peer.have[i] = 1;
     }
     for (const i of peer.pendingHaves) if (i < this.info.pieceCount) peer.have[i] = 1;
+    peer.haveCount = peer.have.reduce((n, v) => n + v, 0);
     peer.pendingBitfield = null;
     peer.pendingHaves = [];
   }
@@ -462,7 +534,10 @@ export class Download {
         if (payload.length < 4) return;
         const i = v.getUint32(0);
         if (peer.have) {
-          if (i < peer.have.length) peer.have[i] = 1;
+          if (i < peer.have.length && !peer.have[i]) {
+            peer.have[i] = 1;
+            peer.haveCount++;
+          }
         } else peer.pendingHaves.push(i);
         break;
       }
@@ -491,7 +566,7 @@ export class Download {
   }
 
   #fill(peer) {
-    if (!this.info || this.stopped || peer.wire.peerChoking || !peer.have || peer.wire.closed) return;
+    if (!this.info || !this.wanted || this.stopped || peer.wire.peerChoking || !peer.have || peer.wire.closed) return;
     const limit = peer.snubbed ? 4 : peer.maxInflight;
     // Top up only once half the requests are answered, so they leave in batches (one relay message each).
     if (peer.inflight.size > limit / 2) return;
@@ -516,14 +591,14 @@ export class Download {
       const block = a.blocks.indexOf(0);
       if (block !== -1) return [piece, block];
     }
-    // 2. A new piece the peer has, starting from a random place.
+    // 2. A new wanted piece the peer has: the first one in sequential mode, else from a random place.
     const maxActive = Math.max(4, Math.min(Math.max(16, this.peers.size * 2), Math.floor((128 * 1024 * 1024) / this.info.pieceLength)));
     if (this.active.size < maxActive) {
       const n = this.info.pieceCount;
-      const start = Math.floor(Math.random() * n);
+      const start = this.sequential ? 0 : Math.floor(Math.random() * n);
       for (let k = 0; k < n; k++) {
         const piece = (start + k) % n;
-        if (this.done[piece] || this.active.has(piece) || !peer.have[piece]) continue;
+        if (!this.wanted[piece] || this.done[piece] || this.active.has(piece) || !peer.have[piece]) continue;
         const blocks = Math.ceil(this.info.pieceSize(piece) / BLOCK);
         this.active.set(piece, { buf: new Uint8Array(this.info.pieceSize(piece)), blocks: new Uint8Array(blocks), left: blocks, by: new Map() });
         return [piece, 0];
@@ -580,7 +655,7 @@ export class Download {
     const ok = equalBytes(await sha1(a.buf), this.info.pieceHash(piece));
     if (ok && !this.stopped) {
       try {
-        await this.sink.write?.(piece * this.info.pieceLength, a.buf);
+        await this.sink.write?.(piece * this.info.pieceLength, a.buf, piece);
       } catch (err) {
         this.verifying--;
         this.stop(`couldn't save: ${err.message}`);
@@ -596,13 +671,13 @@ export class Download {
       return;
     }
     this.done[piece] = 1;
-    this.remaining--;
+    if (this.wanted?.[piece]) this.remaining--; // select() may have dropped it while it was being fetched
     this.stats.verifiedBytes += a.buf.length;
     this.stats.firstPieceAt ??= Date.now();
+    this.onpiece?.(piece);
     // No "have" messages: this client doesn't upload yet, and each one would cost a relay message.
     if (this.remaining === 0) {
-      this.stats.finishedAt = Date.now();
-      this.stop('complete');
+      this.#complete();
     } else if (this.stats.verifiedBytes >= this.limitBytes) {
       this.stats.finishedAt = Date.now();
       this.stop('limit reached');
