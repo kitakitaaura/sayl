@@ -81,8 +81,7 @@ const server = createServer(async (req, res) => {
       p.get('client_id') === CLIENT_ID &&
       p.get('code_challenge_method') === 'S256' &&
       /^[A-Za-z0-9_-]{43}$/.test(p.get('code_challenge') ?? '') &&
-      (p.get('scope') ?? '').split(' ').includes('workers-scripts.write') &&
-      (p.get('scope') ?? '').split(' ').includes('account-settings.read') &&
+      ['account-settings.read', 'workers-scripts.admin', 'workers-scripts.edit'].every((s) => (p.get('scope') ?? '').split(' ').includes(s)) &&
       !!p.get('state');
     if (!good) return fail(res, 400, 0, `bad authorize request: ${url.search}`);
     const back = new URL(redirect);

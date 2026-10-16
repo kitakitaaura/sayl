@@ -18,7 +18,8 @@
  */
 import { RELAY } from './relay-source.js';
 
-const DEFAULT_SCOPES = 'account-settings.read workers-scripts.write';
+// Cloudflare's names for "Account Settings: Read" and "Workers: Admin" (creating a Worker needs Admin) and "Edit"
+const DEFAULT_SCOPES = 'account-settings.read workers-scripts.admin workers-scripts.edit';
 const COOKIE = 'sayl_oauth';
 const COOKIE_PATH = '/api/relay';
 const SCRIPT_API_DATE = '2025-08-01';
