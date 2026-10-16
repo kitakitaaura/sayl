@@ -7,7 +7,7 @@
  */
 import { browser } from '$app/environment';
 import { api, ApiError, EVENTS_URL, type FileView, type Limits, type Links, type TorrentView } from '$lib/api';
-import { BrowserEngine, EngineError } from '$lib/browser/engine';
+import { BrowserEngine, EngineError, type AutoSelect, type ShareFile } from '$lib/browser/engine';
 import { relayConfig } from '$lib/browser/relay.svelte';
 import { storageSupported } from '$lib/browser/storage';
 import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
@@ -37,8 +37,7 @@ class App {
 
   chips = $state({
     sequential: settings.prefs.sequentialDefault,
-    // the browser engine doesn't upload yet
-    seed: BROWSER_ENGINE ? false : settings.prefs.seedDefault,
+    seed: settings.prefs.seedDefault,
     select: settings.prefs.selectFiles,
   });
 
@@ -265,8 +264,32 @@ class App {
   }
 
   /** For the browser engine: start every file once the metadata is in, unless the user picks them. */
-  private autoSelect(): { sequential: boolean } | null {
-    return this.chips.select ? null : { sequential: this.chips.sequential };
+  private autoSelect(): AutoSelect | null {
+    return this.chips.select ? null : { sequential: this.chips.sequential, seed: this.chips.seed };
+  }
+
+  /** Browser engine: makes a torrent from the visitor's files and seeds it. */
+  async create(files: ShareFile[], name: string, onprogress: (fraction: number) => void, signal?: AbortSignal): Promise<{ magnet: string; torrent: Uint8Array } | null> {
+    if (!this.engine) return null;
+    try {
+      const r = await this.engine.create(files, name, onprogress, signal);
+      this.upsert(r.view);
+      this.unhide(r.view.hash);
+      return { magnet: r.magnet, torrent: r.torrent };
+    } catch (err) {
+      if (!signal?.aborted) toasts.push(errorMessage(err), 'err');
+      return null;
+    }
+  }
+
+  /** Browser engine: a torrent's magnet link and .torrent file. */
+  share(hash: string): { name: string; magnet: string; torrent: Uint8Array | null } | null {
+    try {
+      return this.engine?.share(hash) ?? null;
+    } catch (err) {
+      toasts.push(errorMessage(err), 'err');
+      return null;
+    }
   }
 
   private hashOf(source: string): string | null {
@@ -287,7 +310,7 @@ class App {
   async select(hash: string, files: number[], intent: Intent): Promise<boolean> {
     try {
       const r = this.engine
-        ? { torrent: await this.engine.select(hash, files, { sequential: intent.sequential }) }
+        ? { torrent: await this.engine.select(hash, files, { sequential: intent.sequential, seed: intent.seed }) }
         : await api.select(hash, { files, ...intent, ratioLimit: settings.prefs.ratio });
       this.upsert(r.torrent);
       return true;
@@ -297,10 +320,11 @@ class App {
     }
   }
 
-  async act(hash: string, action: 'pause' | 'resume' | 'recheck' | 'stop-seeding'): Promise<void> {
+  async act(hash: string, action: 'pause' | 'resume' | 'recheck' | 'seed' | 'stop-seeding'): Promise<void> {
     try {
       if (action === 'recheck') toasts.push('checking pieces', 'info');
-      this.upsert(this.engine ? await this.engine.action(hash, action) : (await api.action(hash, action)).torrent);
+      if (action === 'seed' && !this.engine) return; // the server version decides seeding when files are picked
+      this.upsert(this.engine ? await this.engine.action(hash, action) : (await api.action(hash, action as Exclude<typeof action, 'seed'>)).torrent);
     } catch (err) {
       toasts.push(errorMessage(err), 'err');
     }

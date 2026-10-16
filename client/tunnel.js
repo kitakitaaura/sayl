@@ -61,6 +61,9 @@ export function openTunnel(relay, { host, port, tls = false }, timeoutMs = 10_00
   });
 }
 
+/** The largest WebSocket message a tunnel sends (well under Cloudflare's limits). */
+const MAX_MESSAGE = 256 * 1024;
+
 /**
  * Small writes made in the same tick (block requests, haves) go out as one
  * WebSocket message. Durable Objects bill incoming messages, so this keeps
@@ -86,15 +89,40 @@ class Tunnel {
   #flush() {
     const parts = this.queue.splice(0);
     if (this.closed || this.ws.readyState !== 1 || !parts.length) return;
-    this.messagesOut++;
-    if (parts.length === 1) return this.ws.send(parts[0]);
-    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let o = 0;
-    for (const p of parts) {
-      out.set(p, o);
-      o += p.length;
+    // Join small writes, but keep each WebSocket message under MAX_MESSAGE (uploads send whole blocks).
+    let batch = [];
+    let size = 0;
+    const sendBatch = () => {
+      if (!batch.length) return;
+      this.messagesOut++;
+      if (batch.length === 1) this.ws.send(batch[0]);
+      else {
+        const out = new Uint8Array(size);
+        let o = 0;
+        for (const p of batch) {
+          out.set(p, o);
+          o += p.length;
+        }
+        this.ws.send(out);
+      }
+      batch = [];
+      size = 0;
+    };
+    for (let p of parts) {
+      while (p.length) {
+        const room = MAX_MESSAGE - size;
+        const take = p.length <= room ? p : p.subarray(0, room);
+        batch.push(take);
+        size += take.length;
+        p = p.subarray(take.length);
+        if (size >= MAX_MESSAGE) sendBatch();
+      }
     }
-    this.ws.send(out);
+    sendBatch();
+  }
+  /** Bytes waiting to go out: queued here or buffered by the WebSocket. */
+  get buffered() {
+    return this.queue.reduce((n, p) => n + p.length, 0) + (this.ws.bufferedAmount ?? 0);
   }
   close() {
     if (this.closed) return;

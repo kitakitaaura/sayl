@@ -162,3 +162,53 @@ test("TURN logins come from the relay, or from the website when the relay has no
     globalThis.fetch = realFetch;
   }
 });
+
+test('makes torrents that parse back and whose pieces check out', async () => {
+  const { createTorrent, pickPieceLength } = await import('../create.js');
+  const { sha1: hash } = await import('../torrent.js');
+  const { pieceSegments } = await import('../files.js');
+  assert.equal(pickPieceLength(1), 16 * 1024);
+  assert.equal(pickPieceLength(1e9), 1024 * 1024);
+  assert.equal(pickPieceLength(1e13), 16 * 1024 * 1024);
+
+  const bytes = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) & 255);
+  const a = bytes(40_000, 1);
+  const c = bytes(70_001, 3);
+  const files = [
+    { path: ['a.bin'], blob: new Blob([a]) },
+    { path: ['sub', 'empty.txt'], blob: new Blob([]) },
+    { path: ['sub', 'c.bin'], blob: new Blob([c]) },
+  ];
+  let lastProgress = null;
+  const t = await createTorrent({ name: 'my share', files, trackers: ['http://t1.test/announce', 'http://t2.test/announce', 'http://t1.test/announce'], onprogress: (d, n) => (lastProgress = [d, n]) });
+  assert.deepEqual(lastProgress, [110_001, 110_001]);
+  assert.equal(t.info.name, 'my share');
+  assert.deepEqual(t.info.files.map((f) => [f.path, f.length]), [['a.bin', 40_000], ['sub/empty.txt', 0], ['sub/c.bin', 70_001]]);
+  assert.equal(t.info.pieceLength, 16 * 1024);
+  assert.equal(t.info.pieceCount, Math.ceil(110_001 / 16384));
+  const parsed = await parseTorrentFile(t.torrent);
+  assert.equal(parsed.infoHash, t.infoHash);
+  assert.deepEqual(parsed.trackers, ['http://t1.test/announce', 'http://t2.test/announce']);
+  const all = new Uint8Array(110_001);
+  all.set(a, 0);
+  all.set(c, 40_000);
+  for (let p = 0; p < t.info.pieceCount; p++) {
+    const start = p * t.info.pieceLength;
+    assert.deepEqual(await hash(all.subarray(start, start + t.info.pieceSize(p))), t.info.pieceHash(p), `piece ${p}`);
+  }
+  assert.ok(pieceSegments(t.info, 2).some((s) => s.file === 2), 'the empty file is skipped over');
+  const m = parseMagnet(t.magnet);
+  assert.equal(m.infoHash, t.infoHash);
+  assert.equal(m.name, 'my share');
+  assert.deepEqual(m.trackers, ['http://t1.test/announce', 'http://t2.test/announce']);
+
+  const one = await createTorrent({ name: 'ignored', files: [{ path: ['song.flac'], blob: new Blob([a]) }] });
+  assert.equal(one.info.name, 'song.flac');
+  assert.deepEqual(one.info.files, [{ path: 'song.flac', length: 40_000, offset: 0 }]);
+  assert.equal((await parseTorrentFile(one.torrent)).infoHash, one.infoHash);
+
+  await assert.rejects(createTorrent({ name: 'x', files: [{ path: ['e'], blob: new Blob([]) }] }), /empty/);
+  await assert.rejects(createTorrent({ name: 'x', files: [{ path: ['..'], blob: new Blob([a]) }] }), /unusable/);
+  await assert.rejects(createTorrent({ name: 'x', files: [{ path: ['a'], blob: new Blob([a]) }, { path: ['a'], blob: new Blob([c]) }] }), /both called/);
+  await assert.rejects(createTorrent({ name: ' ', files }), /name/);
+});

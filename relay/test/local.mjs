@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '../../client/bencode.js';
 import { Dht } from '../../client/dht.js';
+import { createTorrent } from '../../client/create.js';
 import { Download } from '../../client/download.js';
 import { fromHex, parseTorrentFile } from '../../client/torrent.js';
 import { TurnClient, fetchTurnServers } from '../../client/turn.js';
@@ -247,6 +248,71 @@ try {
   const code = await new Promise((r) => cli.on('close', r));
   const cliSummary = safeJson(cliOut.trim().split('\n').pop());
   check('cli downloads to a file and the sha-256 matches', code === 0 && cliSummary?.sha256 === 'match' && readFileSync(outPath).length === SIZE, cliOut.slice(-300).replace(/\s+/g, ' '));
+
+  // 7b. Seeding: Sayl makes a torrent and seeds it; qBittorrent gets it from a bare magnet (metadata from us too).
+  {
+    const a = randomBytes(3 * 1024 * 1024 + 7);
+    const c = randomBytes(5 * 1024 * 1024 + 1);
+    const all = Buffer.concat([a, c]);
+    const made = await createTorrent({
+      name: 'sayl-share',
+      files: [
+        { path: ['a.bin'], blob: new Blob([a]) },
+        { path: ['sub', 'c.bin'], blob: new Blob([c]) },
+      ],
+      trackers: [trackerUrl],
+    });
+    const { pieceLength, pieceCount } = made.info;
+    let reads = 0;
+    const seeder = new Download({
+      relay: { url: relayUrl, via: 'do', session: randomBytes(12).toString('base64url') },
+      source: { infoHash: made.infoHash, trackers: [trackerUrl], peers: [], info: made.info },
+      sink: {},
+      wanted: 'all',
+      have: new Uint8Array(pieceCount).fill(1),
+      seed: true,
+      read: async (p) => {
+        reads++;
+        return new Uint8Array(all.subarray(p * pieceLength, p * pieceLength + made.info.pieceSize(p)));
+      },
+      extraTrackers: false,
+    });
+    let seedingFromStart = false;
+    seeder.oncomplete = () => (seedingFromStart = true);
+    const seeding = seeder.start();
+    const qbitAdd = await fetch(`${qbit}/api/v2/torrents/add`, {
+      method: 'POST',
+      body: new URLSearchParams({ urls: `magnet:?xt=urn:btih:${made.infoHash}&tr=${encodeURIComponent(trackerUrl)}`, savepath: '/downloads/fromsayl' }),
+      headers: { cookie },
+    });
+    check('qbittorrent takes the magnet of a torrent made by sayl', qbitAdd.ok);
+    let qt = null;
+    try {
+      await until(async () => {
+        qt = (await (await fetch(`${qbit}/api/v2/torrents/info?hashes=${made.infoHash}`, { headers: { cookie } })).json())[0];
+        return qt && qt.progress === 1;
+      }, 120, 'qbittorrent to download from the sayl seeder');
+    } catch {}
+    const got = (p) => {
+      try {
+        return readFileSync(join(downloads, 'fromsayl', 'sayl-share', ...p));
+      } catch {
+        return Buffer.alloc(0);
+      }
+    };
+    check(
+      'qbittorrent got the metadata and every file from the sayl seeder, intact',
+      qt?.progress === 1 && got(['a.bin']).equals(a) && got(['sub', 'c.bin']).equals(c),
+      qt?.state,
+    );
+    const p = seeder.progress();
+    check('the seeder counts what it uploaded, and read pieces back to do it', p.seeding && seedingFromStart && p.uploadedBytes >= all.length && reads >= pieceCount, `${p.uploadedBytes} bytes, ${reads} reads`);
+    await until(async () => seeder.progress().peersConnected === 0, 30, 'the seeder to let go of a finished peer').catch(() => {});
+    check('once qbittorrent is a seed too, the seeder lets go of it', seeder.progress().peersConnected === 0);
+    seeder.stop('done');
+    const summary = await seeding;
+    check('a seeder never asks the DHT', summary.dht === 'off' && summary.stopReason === 'done', summary.dht);
+  }
 
   // 8. The DHT over TURN, through the relay (skipped unless coturn is installed).
   if (!hasCoturn) {

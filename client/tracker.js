@@ -31,7 +31,7 @@ const encodeBytes = (bytes) => Array.from(bytes, (b) => `%${b.toString(16).padSt
 
 /**
  * Announces and returns { peers: [{host, port}], interval }.
- * opts: { infoHash: Uint8Array, peerId: Uint8Array, left, downloaded, event }
+ * opts: { infoHash: Uint8Array, peerId: Uint8Array, left, downloaded, uploaded, event }
  */
 export async function announce(relay, trackerUrl, opts) {
   const u = new URL(trackerUrl);
@@ -41,7 +41,7 @@ export async function announce(relay, trackerUrl, opts) {
     `info_hash=${encodeBytes(opts.infoHash)}`,
     `peer_id=${encodeBytes(opts.peerId)}`,
     'port=6881',
-    'uploaded=0',
+    `uploaded=${opts.uploaded ?? 0}`,
     `downloaded=${opts.downloaded ?? 0}`,
     `left=${opts.left ?? 0}`,
     'compact=1',

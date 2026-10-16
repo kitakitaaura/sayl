@@ -1,7 +1,7 @@
 /**
  * The BitTorrent peer wire protocol (BEP 3) with the extension protocol
  * (BEP 10), ut_metadata (BEP 9) and ut_pex (BEP 11), over a relay tunnel.
- * Download only: we never unchoke anyone in this experiment.
+ * Both directions: downloading, and (when seeding) answering requests.
  */
 import { BencodeError, concat, decode, encode } from './bencode.js';
 
@@ -12,15 +12,22 @@ export const EXT = { ut_metadata: 1, ut_pex: 2 };
 const MAX_MESSAGE = 1024 * 1024 + 64;
 
 export class Wire {
-  /** handlers: onHandshake, onExtHandshake, onMessage(id, payload), onClose(reason) */
-  constructor(tunnel, { infoHash, peerId }, handlers) {
+  /**
+   * handlers: onHandshake, onExtHandshake, onMessage(id, payload), onClose(reason)
+   * opts.bitfield():     our pieces as a packed bitfield, or null; sent right after the handshake
+   * opts.metadataSize(): the info dict's size, or null; offered to the peer for ut_metadata
+   */
+  constructor(tunnel, { infoHash, peerId, bitfield = () => null, metadataSize = () => null }, handlers) {
     this.tunnel = tunnel;
     this.infoHash = infoHash;
     this.h = handlers;
+    this.opts = { bitfield, metadataSize };
     this.buf = new Uint8Array(0);
     this.handshaken = false;
     this.closed = false;
     this.peerChoking = true;
+    this.peerInterested = false;
+    this.amChoking = true;
     this.ext = null; // their extension handshake
     tunnel.ondata = (b) => this.#receive(b);
     tunnel.onclose = (reason) => this.close(reason || 'closed');
@@ -52,8 +59,15 @@ export class Wire {
         this.remoteId = b.slice(48, 68);
         this.handshaken = true;
         this.buf = b.subarray(68);
+        // the bitfield must come first, before any other message
+        const bitfield = this.opts.bitfield();
+        if (bitfield) this.send(MSG.bitfield, bitfield);
         if (this.supportsExt) {
-          this.sendExtended(0, encode({ m: { ut_metadata: EXT.ut_metadata, ut_pex: EXT.ut_pex }, v: 'Sayl relay 0.1', reqq: 500 }));
+          const metadataSize = this.opts.metadataSize();
+          this.sendExtended(
+            0,
+            encode({ m: { ut_metadata: EXT.ut_metadata, ut_pex: EXT.ut_pex }, v: 'Sayl relay 0.1', reqq: 500, metadata_size: metadataSize ?? undefined }),
+          );
         }
         this.h.onHandshake?.();
       }
@@ -79,6 +93,8 @@ export class Wire {
   #message(id, payload) {
     if (id === MSG.choke) this.peerChoking = true;
     else if (id === MSG.unchoke) this.peerChoking = false;
+    else if (id === MSG.interested) this.peerInterested = true;
+    else if (id === MSG.notInterested) this.peerInterested = false;
     if (id === MSG.extended) {
       const extId = payload[0];
       const body = payload.subarray(1);
@@ -109,6 +125,34 @@ export class Wire {
     this.send(MSG.interested);
   }
 
+  notInterested() {
+    this.send(MSG.notInterested);
+  }
+
+  choke() {
+    if (this.amChoking) return;
+    this.amChoking = true;
+    this.send(MSG.choke);
+  }
+
+  unchoke() {
+    if (!this.amChoking) return;
+    this.amChoking = false;
+    this.send(MSG.unchoke);
+  }
+
+  /** Sends one block of a piece. */
+  piece(index, begin, data) {
+    const out = new Uint8Array(13 + data.length);
+    const v = new DataView(out.buffer);
+    v.setUint32(0, 9 + data.length);
+    out[4] = MSG.piece;
+    v.setUint32(5, index);
+    v.setUint32(9, begin);
+    out.set(data, 13);
+    this.tunnel.send(out);
+  }
+
   request(index, begin, length) {
     const p = new Uint8Array(12);
     const v = new DataView(p.buffer);
@@ -131,6 +175,14 @@ export class Wire {
     const p = new Uint8Array(4);
     new DataView(p.buffer).setUint32(0, index);
     this.send(MSG.have, p);
+  }
+
+  /** Answers a ut_metadata request: the piece of the info dict, or a reject when `data` is null. */
+  sendMetadata(piece, totalSize, data) {
+    const theirId = this.ext?.m?.ut_metadata;
+    if (!theirId) return;
+    if (!data) return this.sendExtended(theirId, encode({ msg_type: 2, piece }));
+    this.sendExtended(theirId, concat([encode({ msg_type: 1, piece, total_size: totalSize }), data]));
   }
 
   /** Asks for one 16 KiB piece of the info dict, if the peer offers ut_metadata. */

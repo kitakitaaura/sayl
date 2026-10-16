@@ -15,11 +15,13 @@
   import { onMount, type Snippet } from 'svelte';
   import { page } from '$app/state';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import CreateDialog from '$lib/components/CreateDialog.svelte';
   import DownloadDialog from '$lib/components/DownloadDialog.svelte';
   import DropOverlay from '$lib/components/DropOverlay.svelte';
   import FileDialog from '$lib/components/FileDialog.svelte';
   import Nav from '$lib/components/Nav.svelte';
   import RemoveDialog from '$lib/components/RemoveDialog.svelte';
+  import ShareDialog from '$lib/components/ShareDialog.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
   import { APP_NAME, DESCRIPTION, SITE_URL } from '$lib/config';
   import { app } from '$lib/state/app.svelte';
@@ -65,6 +67,10 @@
     <DownloadDialog hash={ui.dialog.hash} onclose={close} />
   {:else if ui.dialog?.kind === 'remove'}
     <RemoveDialog hash={ui.dialog.hash} onclose={close} />
+  {:else if ui.dialog?.kind === 'create'}
+    <CreateDialog entries={ui.dialog.entries} onclose={close} />
+  {:else if ui.dialog?.kind === 'share'}
+    <ShareDialog hash={ui.dialog.hash} onclose={close} />
   {:else if ui.dialog?.kind === 'confirm'}
     <ConfirmDialog title={ui.dialog.title} text={ui.dialog.text} label={ui.dialog.label} run={ui.dialog.run} onclose={close} />
   {/if}

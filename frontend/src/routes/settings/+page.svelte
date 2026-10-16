@@ -73,6 +73,18 @@
         </div>
       </section>
 
+      <section class="section" aria-labelledby="s-sh">
+        <h2 id="s-sh">sharing</h2>
+        <div class="row">
+          <div class="lbl"><b>seed after by default</b><span>turns on "seed after" for every new torrent. finished torrents then keep sharing while this tab is open.</span></div>
+          <Switch label="seed after by default" checked={p.seedDefault} onchange={setSeedDefault} />
+        </div>
+        <div class="row">
+          <div class="lbl"><b>ratio limit</b><span>seeding stops once a torrent has uploaded this many times its size, or when you close this tab.</span></div>
+          <Segmented label="ratio limit" value={p.ratio} options={RATIO_CHOICES.map((r) => ({ value: r as number, label: r.toFixed(1) }))} onchange={(v) => settings.set('ratio', v)} />
+        </div>
+      </section>
+
       <section class="section" aria-labelledby="s-st">
         <h2 id="s-st">storage</h2>
         <div class="row">

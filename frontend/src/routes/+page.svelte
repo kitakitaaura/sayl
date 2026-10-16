@@ -8,23 +8,34 @@
   import { ABUSE_EMAIL, APP_NAME, BROWSER_ENGINE } from '$lib/config';
   import { app } from '$lib/state/app.svelte';
   import { settings } from '$lib/state/settings.svelte';
+  import { ui } from '$lib/state/ui.svelte';
 
-  let fileInput: HTMLInputElement;
+  let fileInput = $state<HTMLInputElement>();
+  let shareInput = $state<HTMLInputElement>();
+  let folderInput = $state<HTMLInputElement>();
 
-  const allChips = [
+  const chips = [
     { key: 'sequential', label: 'sequential' },
     { key: 'seed', label: 'seed after' },
     { key: 'select', label: 'select files' },
   ] as const;
-  // the browser engine doesn't upload yet, so it can't seed
-  const chips = BROWSER_ENGINE ? allChips.filter((c) => c.key !== 'seed') : allChips;
 
-  function toggle(key: (typeof allChips)[number]['key']) {
+  /** Browser engine: files or a folder picked to share. */
+  function pickedToShare(input: HTMLInputElement | undefined) {
+    if (!input) return;
+    const files = [...(input.files ?? [])];
+    input.value = '';
+    if (!files.length) return;
+    ui.open({ kind: 'create', entries: files.map((file) => ({ file, path: file.webkitRelativePath || file.name })) });
+  }
+
+  function toggle(key: (typeof chips)[number]['key']) {
     app.chips[key] = !app.chips[key];
     if (key === 'select') settings.set('selectFiles', app.chips.select);
   }
 
   async function picked() {
+    if (!fileInput) return;
     const file = fileInput.files?.[0];
     fileInput.value = '';
     if (file) await app.addFile(file);
@@ -58,9 +69,17 @@
     </div>
     <p class="hint">
       or drop a .torrent file anywhere ·
-      <button type="button" class="linkish" onclick={() => fileInput.click()}>choose one</button>
+      <button type="button" class="linkish" onclick={() => fileInput?.click()}>choose one</button>
     </p>
     <input bind:this={fileInput} type="file" accept=".torrent,application/x-bittorrent" hidden onchange={picked} />
+    {#if BROWSER_ENGINE}
+      <p class="hint">
+        <button type="button" class="linkish" onclick={() => shareInput?.click()}>share your files</button> or
+        <button type="button" class="linkish" onclick={() => folderInput?.click()}>a folder</button> as a torrent
+      </p>
+      <input bind:this={shareInput} type="file" multiple hidden aria-label="files to share" onchange={() => pickedToShare(shareInput)} />
+      <input bind:this={folderInput} type="file" webkitdirectory hidden aria-label="folder to share" onchange={() => pickedToShare(folderInput)} />
+    {/if}
 
     {#if app.status === 'offline'}
       <p class="status" role="status">can't reach {APP_NAME.toLowerCase()} right now. retrying…</p>

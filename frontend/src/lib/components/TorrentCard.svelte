@@ -7,6 +7,8 @@
   import Pause from '@lucide/svelte/icons/pause';
   import Play from '@lucide/svelte/icons/play';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+  import Share2 from '@lucide/svelte/icons/share-2';
+  import Upload from '@lucide/svelte/icons/upload';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Users from '@lucide/svelte/icons/users';
   import type { TorrentView } from '$lib/api';
@@ -94,7 +96,7 @@
     <div class="stats tabular">
       {#if t.state === 'downloading' || t.state === 'stalled' || t.state === 'queued'}
         <span title="download speed"><ArrowDown size={13} aria-hidden="true" /><span class="sr">download speed: </span>{fmtSpeed(t.dlSpeed)}</span>
-        {#if !BROWSER_ENGINE}<span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>{/if}
+        {#if !BROWSER_ENGINE || t.seed}<span title="upload speed"><ArrowUp size={13} aria-hidden="true" /><span class="sr">upload speed: </span>{fmtSpeed(t.upSpeed)}</span>{/if}
         <span title="time left"><Clock size={13} aria-hidden="true" /><span class="sr">time left: </span>{t.eta === null ? '—' : fmtDur(t.eta)}</span>
         <span title="peers · seeds"><Users size={13} aria-hidden="true" /><span class="sr">peers and seeds: </span>{t.peers} · {t.seeds}</span>
       {:else if t.state === 'seeding'}
@@ -113,7 +115,7 @@
       {:else if t.state === 'error'}
         <span>{t.error ?? 'something went wrong with this torrent. try a recheck, or remove it.'}</span>
       {:else if BROWSER_ENGINE}
-        <span>ready to save</span>
+        <span>ready to save</span>{#if t.uploaded > 0}<span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span>{/if}
       {:else}
         <span title="uploaded in total">uploaded {fmtBytes(t.uploaded)} · ratio {ratio(t.ratio)}</span><span>ready to download</span>
       {/if}
@@ -134,6 +136,22 @@
         {/if}
         <button type="button" class="icon-btn" title="force recheck" aria-label="force recheck" disabled={t.state === 'checking'} onclick={() => app.act(t.hash, 'recheck')}><RotateCcw size={16} aria-hidden="true" /></button>
         <button type="button" class="icon-btn" title={finished ? 'download' : 'available when finished'} aria-label="download" disabled={!finished || t.state === 'checking'} onclick={download}><Download size={16} aria-hidden="true" /></button>
+        {#if BROWSER_ENGINE && finished && t.state !== 'checking' && t.state !== 'error'}
+          <button
+            type="button"
+            class="icon-btn"
+            class:accent={t.seed}
+            title={t.seed ? 'stop seeding' : 'seed: share it from this tab'}
+            aria-label={t.seed ? 'stop seeding' : 'seed'}
+            aria-pressed={t.seed}
+            onclick={() => app.act(t.hash, t.seed ? 'stop-seeding' : 'seed')}
+          >
+            <Upload size={16} aria-hidden="true" />
+          </button>
+        {/if}
+        {#if BROWSER_ENGINE}
+          <button type="button" class="icon-btn" title="share: magnet link and .torrent" aria-label="share" onclick={() => ui.open({ kind: 'share', hash: t.hash })}><Share2 size={16} aria-hidden="true" /></button>
+        {/if}
       {/if}
       <button type="button" class="icon-btn" title="remove" aria-label="remove" onclick={() => ui.open({ kind: 'remove', hash: t.hash })}><Trash2 size={16} aria-hidden="true" /></button>
     </div>

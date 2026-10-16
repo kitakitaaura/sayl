@@ -63,7 +63,7 @@ If the TURN server is missing, out of quota or refusing logins, downloads carry 
 
 The relay must not become a free proxy, so it only carries:
 
-- **BitTorrent connections.** The page must open with a BitTorrent handshake, and the remote must answer with one before anything else passes, in either direction.
+- **BitTorrent connections.** The page must open with a BitTorrent handshake, and the remote must answer with one before anything else passes, in either direction. After that, pieces go both ways: downloads, and uploads when the person chose to seed.
 - **One tracker announce per tunnel.** A single `GET …announce…?…info_hash=…` request and nothing after it.
 - **TURN,** and only to the hosts in `TURN_HOSTS`.
 
@@ -113,4 +113,4 @@ node test/website.mjs    # the Sayl website in browser mode, in Chromium, agains
 node test/setup.mjs      # "set up with cloudflare": sign-in, upload, workers.dev, against a stand-in Cloudflare
 ```
 
-`local.mjs` downloads through the relay in every mode and checks: refusals, file choice, sequential order, resuming, the DHT as the last resort, and a refused TURN login. `website.mjs` goes through the site like a person: set the relay, add a magnet and a `.torrent`, pick files, save them and compare them byte for byte, recheck, pause and resume, reload mid-download, and remove.
+`local.mjs` downloads through the relay in every mode and checks: refusals, file choice, sequential order, resuming, seeding (qBittorrent gets a torrent made by the client, metadata included, from a bare magnet), the DHT as the last resort, and a refused TURN login. `website.mjs` goes through the site like a person: set the relay, add a magnet and a `.torrent`, pick files, save them and compare them byte for byte, recheck, pause and resume, reload mid-download, remove, and share a folder that qBittorrent then downloads from the page (seeding stops at the ratio limit).

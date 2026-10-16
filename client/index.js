@@ -4,3 +4,4 @@ export { parseMagnet, parseTorrentFile, parseInfo, hex, fromHex, sha1, equalByte
 export { fetchTurnServers } from './turn.js';
 export { pieceSegments, piecesForFiles, fileProgress, safePathParts } from './files.js';
 export { BUNDLED_TRACKERS, loadPublicTrackers } from './public-trackers.js';
+export { createTorrent, magnetLink, pickPieceLength, torrentFile } from './create.js';

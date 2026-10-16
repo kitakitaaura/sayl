@@ -1,6 +1,6 @@
 # Sayl
 
-**Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents right in your browser. Paste a magnet link or drop a `.torrent`, pick files, save them. Nothing to install, no server holding anyone's files, and free for everyone.
+**Sayl** (Arabic سيل, "torrent" or "flash flood") downloads torrents right in your browser. Paste a magnet link or drop a `.torrent`, pick files, save them. You can also share: seed what you downloaded, or turn your own files into a torrent and seed them from the tab. Nothing to install, no server holding anyone's files, and free for everyone.
 
 There are two ways to run it:
 
@@ -19,6 +19,8 @@ sayl.kitaaura.com          Cloudflare Pages: the website, plain static files
 ```
 
 Finding peers, in order: the torrent's own trackers and about 25 public HTTP trackers, then PEX, and only when that finds no one, the DHT through a TURN server. See [relay/README.md](relay/README.md) for the relay, the DHT setup, what the relay agrees to carry, and measured speeds (17–20 MB/s on a home connection).
+
+**Sharing** is opt-in, per torrent: the "seed after" chip, the seed button on a finished torrent, or *share your files* (pick files or a folder, or drop them on the page). A torrent being shared uploads while it runs and keeps seeding once complete, until it has uploaded the ratio limit (settings: 0.5, 1 or 2 times its size; 1 by default) or the tab closes. Relays can't accept incoming connections, so a seeder connects out to the peers the trackers name (asking the magnet's 10 trackers every 5 minutes) and reconnects to peers that drop it. A torrent made in Sayl lists the public HTTP trackers, and its files are copied into the browser's storage, so seeding survives a reload. Seeders never use the DHT, to spare the TURN quota.
 
 ## Put it online
 
@@ -102,7 +104,7 @@ Open the site and enter `http://localhost:8787` as the relay.
 | Path | What it is |
 |---|---|
 | `frontend/` | The SvelteKit website. `src/lib/browser/` is the browser engine; `worker/` is the website's Worker, which installs relays. |
-| `client/` | The BitTorrent client the website runs: peer protocol, metadata from magnets, PEX, HTTP trackers, the DHT over TURN, piece picking and checks. Plain JS, also runs in Node. |
+| `client/` | The BitTorrent client the website runs: peer protocol, metadata from magnets, PEX, HTTP trackers, the DHT over TURN, piece picking and checks, seeding, and making torrents. Plain JS, also runs in Node. |
 | `relay/` | The relay Worker, its command-line tools, and the end-to-end tests. |
 | `brand.json` | The product name. Change it here (or set `APP_NAME`) to rename everything. |
 | `backend/`, `deploy/`, `docker-compose.yml`, `.env.example` | The server version. |
@@ -252,7 +254,7 @@ For a takedown notice: find the torrent (`list`), then `block` it. For repeat ab
 ## Tests
 
 ```sh
-cd client && npm test                      # bencode, magnets, trackers, piece-to-file mapping, TURN messages
+cd client && npm test                      # bencode, magnets, trackers, piece-to-file mapping, TURN logins, making torrents
 cd relay && npm test                       # what the relay agrees to carry
 cd relay && node test/local.mjs            # relay + client against a real qBittorrent (Docker)
 cd relay && node test/website.mjs          # the website in browser mode, clicked through in Chromium

@@ -14,15 +14,23 @@
  *             the user picks files once the metadata is in
  * have:       a Uint8Array with 1 for pieces already verified on disk (resuming)
  * sequential: fetch pieces in order instead of rarest-first-ish random order
+ * seed:       share too: answer peers' requests for the pieces we have, and once
+ *             everything wanted is in, keep going (seeding) until stop() is called
+ * read:       async (piece) => the piece's bytes from storage, needed with `seed`
  *
  * Callbacks: onmetadata(info) once the info dict is known, onpiece(piece)
- * after each verified piece is written, onprogress(stats) every second.
+ * after each verified piece is written, oncomplete() once every wanted piece
+ * is in, onprogress(stats) every second.
  *
  * Finding peers, in order: the torrent's own trackers and the public HTTP
  * trackers (right away), then PEX from connected peers, and only if all of
  * that leaves us with nobody to talk to, a DHT lookup through TURN. If the
  * DHT is unavailable (not set up, quota used up, server down) the download
  * carries on with what it has.
+ *
+ * Seeding: relays can't take incoming connections, so a seeder connects out to
+ * the peers trackers and PEX name, and uploads to those that ask. Up to
+ * `uploadSlots` interested peers are unchoked at once, taking turns every 30 s.
  */
 import { MSG, EXT, Wire, parseMetadataMessage, parsePex } from './wire.js';
 import { announce, announceUrls } from './tracker.js';
@@ -39,6 +47,12 @@ const SNUB_MS = 20_000;
 const MAX_ANNOUNCING = 12;
 const DHT_AFTER_MS = 15_000; // give trackers and PEX this long before trying the DHT
 const DHT_RETRY_MS = 10 * 60_000;
+const SEED_ANNOUNCE_S = 300; // a seeder asks the torrent's first trackers for new peers every 5 minutes
+const SEED_FAST_TRACKERS = 10; // as many as a magnet link carries
+const MAX_REQUEST = 128 * 1024; // the biggest block a peer may ask us for
+const MAX_QUEUED_REQUESTS = 256; // per peer
+const MAX_BUFFERED = 4 * 1024 * 1024; // per peer: past this, wait for the relay to catch up
+const ROTATE_MS = 30_000;
 /** Shared by every download on the page: when the DHT failed in a way that won't fix itself soon. */
 let dhtOffUntil = 0;
 
@@ -55,6 +69,9 @@ export class Download {
     wanted = 'all',
     have = null,
     sequential = false,
+    seed = false,
+    read = null,
+    uploadSlots = 4,
     log = () => {},
   }) {
     this.relay = relay;
@@ -68,6 +85,14 @@ export class Download {
     this.wantedOption = wanted;
     this.haveOption = have;
     this.sequential = sequential;
+    this.seed = seed && typeof read === 'function';
+    this.readPiece = read;
+    this.uploadSlots = Math.max(1, uploadSlots);
+    /** true once everything wanted is in and the download stays up to share */
+    this.seeding = false;
+    this.unchoked = new Set();
+    this.lastRotateAt = 0;
+    this.pieceCache = new Map(); // piece → Promise<Uint8Array | null>, oldest first
     this.infoHash = fromHex(source.infoHash);
     this.peerId = new TextEncoder().encode(`-SY0001-${Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('')}`);
     this.extraTrackers = extraTrackers;
@@ -77,7 +102,7 @@ export class Download {
     this.dhtRunning = false;
     this.dhtNextAt = 0;
     this.info = null;
-    this.known = new Map(); // "host:port" → { host, port, tried }
+    this.known = new Map(); // "host:port" → { host, port, from, tried, live, nextAt, fails, drops, done }
     this.peers = new Set();
     this.connecting = 0;
     this.stats = {
@@ -87,6 +112,7 @@ export class Download {
       finishedAt: null,
       verifiedBytes: 0,
       receivedBytes: 0,
+      uploadedBytes: 0,
       wastedBytes: 0,
       hashFailures: 0,
       messagesOut: 0,
@@ -108,6 +134,7 @@ export class Download {
     this.onprogress = null;
     this.onmetadata = null;
     this.onpiece = null;
+    this.oncomplete = null;
   }
 
   /** Verified pieces (1) so far, or null before the metadata is known. */
@@ -136,8 +163,22 @@ export class Download {
   }
 
   #complete() {
-    this.stats.finishedAt = Date.now();
-    this.stop('complete');
+    if (this.seeding) return;
+    this.stats.finishedAt ??= Date.now();
+    this.oncomplete?.();
+    if (!this.seed) return this.stop('complete');
+    this.seeding = true;
+    this.log('complete; seeding');
+    for (const t of this.trackers.values()) if (t.announced) t.completedPending = true;
+    for (const peer of this.peers) {
+      if (this.#isSeed(peer)) peer.wire.close('both seeds');
+      else peer.wire.notInterested();
+    }
+  }
+
+  /** A peer with every piece: nothing to trade once we're seeding too. */
+  #isSeed(peer) {
+    return !!this.info && !!peer.have && peer.haveCount === this.info.pieceCount;
   }
 
   async start() {
@@ -145,7 +186,7 @@ export class Download {
     this.finished = new Promise((resolve) => (this.#resolve = resolve));
     if (this.source.info) await this.#setInfo(this.source.info);
     for (const p of this.source.peers ?? []) this.#addPeer(p, 'given');
-    this.#addTrackers(this.source.trackers ?? []);
+    this.#addTrackers(this.source.trackers ?? [], SEED_FAST_TRACKERS);
     if (this.extraTrackers) loadPublicTrackers().then((list) => this.#addTrackers(list));
     this.#announceDue();
     this.ticker = setInterval(() => this.#tick(), 1000);
@@ -177,6 +218,7 @@ export class Download {
       firstPieceSeconds: s.firstPieceAt ? (s.firstPieceAt - s.started) / 1000 : null,
       verifiedBytes: s.verifiedBytes,
       receivedBytes: s.receivedBytes,
+      uploadedBytes: s.uploadedBytes,
       wastedBytes: s.wastedBytes,
       hashFailures: s.hashFailures,
       averageMBps: s.verifiedBytes / 1e6 / secs,
@@ -199,13 +241,46 @@ export class Download {
     const [host, port] = typeof p === 'string' ? splitHostPort(p) : [p.host, p.port];
     if (!host || !port) return;
     const key = host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
-    if (this.known.has(key)) return;
-    this.known.set(key, { host, port, tried: false, from });
+    const k = this.known.get(key);
+    if (k) {
+      // A tracker naming a peer we gave up on: worth another go.
+      if (from === 'tracker' && !k.live && !k.done && k.nextAt === Infinity) {
+        k.fails = 0;
+        k.nextAt = 0;
+      }
+      return;
+    }
+    this.known.set(key, { host, port, from, tried: false, live: false, nextAt: 0, fails: 0, drops: 0, done: false });
     this.stats.found++;
   }
 
-  #addTrackers(urls) {
-    for (const url of announceUrls(urls)) if (!this.trackers.has(url)) this.trackers.set(url, { nextAt: 0, failures: 0, busy: false });
+  /**
+   * When to try a peer again. Peers can't reach a relay, so reconnecting is up to us: a peer that
+   * dropped us (a client restarting a torrent, say) is retried after 15 s, then less often; one we
+   * couldn't reach, twice more; a fellow seed, never.
+   */
+  #retryLater(k, { failed = false, reason = '', since = 0 } = {}) {
+    k.live = false;
+    const now = Date.now();
+    if (reason === 'both seeds') {
+      k.done = true;
+      k.nextAt = Infinity;
+    } else if (failed) {
+      k.fails++;
+      k.nextAt = k.fails >= 3 ? Infinity : now + 60_000 * k.fails;
+    } else {
+      k.fails = 0;
+      if (since && now - since > 5 * 60_000) k.drops = 0; // a long, healthy connection
+      k.drops++;
+      k.nextAt = now + 15_000 * 2 ** Math.min(k.drops - 1, 5);
+    }
+  }
+
+  /** `fast`: how many of these a seeder asks every 5 minutes (the rest at the tracker's own pace). */
+  #addTrackers(urls, fast = 0) {
+    announceUrls(urls).forEach((url, i) => {
+      if (!this.trackers.has(url)) this.trackers.set(url, { nextAt: 0, failures: 0, busy: false, fast: i < fast });
+    });
     this.#announceDue();
   }
 
@@ -218,16 +293,18 @@ export class Download {
       if (t.busy || t.nextAt > now) continue;
       t.busy = true;
       this.announcing++;
-      const left = this.info ? this.remaining * this.info.pieceLength : 1;
-      const event = t.announced ? undefined : 'started';
-      announce(this.relay, url, { infoHash: this.infoHash, peerId: this.peerId, left, downloaded: this.stats.verifiedBytes, event })
+      const left = this.seeding ? 0 : this.info ? this.remaining * this.info.pieceLength : 1;
+      const event = !t.announced ? 'started' : t.completedPending ? 'completed' : undefined;
+      announce(this.relay, url, { infoHash: this.infoHash, peerId: this.peerId, left, downloaded: this.stats.verifiedBytes, uploaded: this.stats.uploadedBytes, event })
         .then((r) => {
           t.announced = true;
+          if (event === 'completed') t.completedPending = false;
           t.failures = 0;
           this.stats.trackers[url] = `${r.peers.length} peers`;
           for (const p of r.peers) this.#addPeer(p, 'tracker');
-          // Ask again at the tracker's own pace, between 5 and 30 minutes.
-          t.nextAt = Date.now() + Math.min(Math.max(r.interval, 300), 1800) * 1000;
+          // Ask again at the tracker's own pace, between 5 and 30 minutes. A seeder can't be
+          // reached, so it asks the torrent's own first trackers every 5 minutes, to find new peers.
+          t.nextAt = Date.now() + (this.seeding && t.fast ? SEED_ANNOUNCE_S : Math.min(Math.max(r.interval, 300), 1800)) * 1000;
         })
         .catch((err) => {
           t.failures++;
@@ -244,7 +321,8 @@ export class Download {
 
   /** The last resort: only when trackers and PEX have left us with no one to connect to. */
   #maybeDht(now) {
-    if (!this.dhtOptions || this.dhtRunning || now < this.dhtNextAt) return;
+    // a seeder finds peers through trackers and PEX only, to spare the TURN quota
+    if (!this.dhtOptions || this.seeding || this.dhtRunning || now < this.dhtNextAt) return;
     const waited = now - this.stats.started;
     // Wait for the trackers' answers, but not forever: a slow tracker shouldn't hold the DHT back.
     if (waited < DHT_AFTER_MS || (this.announcing > 0 && waited < 45_000)) return;
@@ -306,8 +384,9 @@ export class Download {
     let budget = 10;
     for (const [key, k] of this.known) {
       if (budget <= 0 || this.peers.size + this.connecting >= this.maxPeers) break;
-      if (k.tried) continue;
+      if (k.live || k.nextAt > now) continue;
       k.tried = true;
+      k.live = true;
       budget--;
       this.#connect(key, k);
     }
@@ -327,7 +406,9 @@ export class Download {
       }
       if (this.metadata && peer.wantsMetadata) this.#askMetadata(peer);
       this.#fill(peer);
+      if (peer.requests.length) void this.#serve(peer);
     }
+    if (this.seed) this.#rotate(now);
     this.onprogress?.(this.progress());
   }
 
@@ -335,8 +416,10 @@ export class Download {
     const s = this.stats;
     const secs = (Date.now() - (this.lastProgressAt ?? s.started)) / 1000;
     const rate = secs > 0 ? (s.verifiedBytes - (this.lastVerified ?? 0)) / secs : 0;
+    const upRate = secs > 0 ? (s.uploadedBytes - (this.lastUploaded ?? 0)) / secs : 0;
     this.lastProgressAt = Date.now();
     this.lastVerified = s.verifiedBytes;
+    this.lastUploaded = s.uploadedBytes;
     let unchoked = 0;
     let seeds = 0;
     for (const p of this.peers) {
@@ -348,6 +431,9 @@ export class Download {
       size: this.info?.length ?? null,
       verifiedBytes: s.verifiedBytes,
       bytesPerSecond: rate,
+      uploadedBytes: s.uploadedBytes,
+      uploadBytesPerSecond: upRate,
+      seeding: this.seeding,
       peersKnown: this.known.size,
       peersConnected: this.peers.size,
       peersUnchoked: unchoked,
@@ -366,12 +452,15 @@ export class Download {
     } catch (err) {
       this.connecting--;
       this.#countFailure(err.message);
+      this.#retryLater(k, { failed: true });
       return;
     }
     if (this.stopped) {
       this.connecting--;
+      k.live = false;
       return tunnel.close();
     }
+    let connectedAt = 0;
     this.stats.connected++;
     // Until the handshake, the connection still counts as "connecting", so it holds a slot.
     let handshaking = true;
@@ -394,14 +483,24 @@ export class Download {
       snubbed: false,
       maxInflight: this.pipeline,
       wantsMetadata: false,
+      requests: [], // what the peer asked us for: { index, begin, length }
+      serving: false,
+      unchokedAt: 0,
     };
-    peer.wire = new Wire(tunnel, { infoHash: this.infoHash, peerId: this.peerId }, {
+    const wireOptions = {
+      infoHash: this.infoHash,
+      peerId: this.peerId,
+      bitfield: () => this.#bitfield(),
+      metadataSize: () => (this.seed && this.info?.raw ? this.info.raw.length : null),
+    };
+    peer.wire = new Wire(tunnel, wireOptions, {
       onHandshake: () => {
         settle();
+        connectedAt = Date.now();
         this.stats.handshaken++;
         this.peers.add(peer);
         this.#applyHaves(peer); // a peer with nothing to offer may never send a bitfield
-        peer.wire.interested();
+        if (!this.seeding) peer.wire.interested();
       },
       onExtHandshake: (ext) => {
         if (Number.isInteger(ext.reqq) && ext.reqq > 0) peer.maxInflight = Math.min(this.pipeline, ext.reqq);
@@ -421,9 +520,12 @@ export class Download {
           settle();
           this.#countFailure(reason);
         }
+        this.#retryLater(k, { failed: !connectedAt, reason, since: connectedAt });
         this.stats.messagesOut += tunnel.messagesOut;
         this.peers.delete(peer);
         this.#release(peer);
+        peer.requests = [];
+        if (this.unchoked.delete(peer)) this.#unchokeSome();
       },
     });
   }
@@ -440,13 +542,15 @@ export class Download {
       } catch {}
       return;
     }
-    if (id !== EXT.ut_metadata || this.info || !this.metadata) return;
+    if (id !== EXT.ut_metadata) return;
     let m;
     try {
       m = parseMetadataMessage(body);
     } catch {
       return;
     }
+    if (m.type === 0) return this.#serveMetadata(peer, m.piece);
+    if (this.info || !this.metadata) return;
     if (m.type === 2) {
       peer.wantsMetadata = false;
       return;
@@ -471,6 +575,14 @@ export class Download {
     } else {
       this.#askMetadata(peer);
     }
+  }
+
+  /** A peer asked for a piece of the info dict (only offered when seeding). */
+  #serveMetadata(peer, piece) {
+    const raw = this.seed ? this.info?.raw : null;
+    const count = raw ? Math.ceil(raw.length / METADATA_PIECE) : 0;
+    if (!raw || !Number.isInteger(piece) || piece < 0 || piece >= count) return peer.wire.sendMetadata(piece, 0, null);
+    peer.wire.sendMetadata(piece, raw.length, raw.subarray(piece * METADATA_PIECE, (piece + 1) * METADATA_PIECE));
   }
 
   #askMetadata(peer) {
@@ -529,6 +641,7 @@ export class Download {
         peer.pendingBitfield = payload.slice();
         peer.have = null;
         this.#applyHaves(peer);
+        if (this.seeding && this.#isSeed(peer)) return peer.wire.close('both seeds');
         break;
       case MSG.have: {
         if (payload.length < 4) return;
@@ -538,7 +651,28 @@ export class Download {
             peer.have[i] = 1;
             peer.haveCount++;
           }
+          if (this.seeding && this.#isSeed(peer)) return peer.wire.close('both seeds');
         } else peer.pendingHaves.push(i);
+        break;
+      }
+      case MSG.interested:
+        this.#unchokeSome();
+        break;
+      case MSG.notInterested:
+        if (this.unchoked.delete(peer)) {
+          peer.wire.choke();
+          peer.requests = [];
+          this.#unchokeSome();
+        }
+        break;
+      case MSG.request:
+        if (payload.length < 12) return;
+        this.#request(peer, v.getUint32(0), v.getUint32(4), v.getUint32(8));
+        break;
+      case MSG.cancel: {
+        if (payload.length < 12) return;
+        const [index, begin, length] = [v.getUint32(0), v.getUint32(4), v.getUint32(8)];
+        peer.requests = peer.requests.filter((r) => !(r.index === index && r.begin === begin && r.length === length));
         break;
       }
       case MSG.choke:
@@ -675,13 +809,130 @@ export class Download {
     this.stats.verifiedBytes += a.buf.length;
     this.stats.firstPieceAt ??= Date.now();
     this.onpiece?.(piece);
-    // No "have" messages: this client doesn't upload yet, and each one would cost a relay message.
+    // Only when sharing: each "have" costs a relay message.
+    if (this.seed) {
+      for (const peer of this.peers) peer.wire.have(piece);
+      this.#cachePiece(piece, Promise.resolve(a.buf));
+    }
     if (this.remaining === 0) {
       this.#complete();
     } else if (this.stats.verifiedBytes >= this.limitBytes) {
       this.stats.finishedAt = Date.now();
       this.stop('limit reached');
     }
+  }
+
+  // ── uploading ───────────────────────────────────────────────────────────
+
+  /** Our verified pieces, packed one bit per piece; null when not sharing or when we have none. */
+  #bitfield() {
+    if (!this.seed || !this.done) return null;
+    const bits = new Uint8Array(Math.ceil(this.done.length / 8));
+    let any = false;
+    for (let i = 0; i < this.done.length; i++) {
+      if (this.done[i] !== 1) continue;
+      bits[i >> 3] |= 0x80 >> (i & 7);
+      any = true;
+    }
+    return any ? bits : null;
+  }
+
+  /** Unchokes interested peers until the upload slots are full, picking at random. `skip` waits a turn. */
+  #unchokeSome(skip = null) {
+    if (!this.seed || this.stopped) return;
+    for (const p of this.unchoked) {
+      if (p.wire.closed || !p.wire.peerInterested) {
+        this.unchoked.delete(p);
+        if (!p.wire.closed) p.wire.choke();
+        p.requests = [];
+      }
+    }
+    const waiting = [...this.peers].filter((p) => p !== skip && p.wire.peerInterested && p.wire.amChoking && !p.wire.closed);
+    while (this.unchoked.size < this.uploadSlots && waiting.length) {
+      const p = waiting.splice(Math.floor(Math.random() * waiting.length), 1)[0];
+      p.wire.unchoke();
+      p.unchokedAt = Date.now();
+      this.unchoked.add(p);
+    }
+  }
+
+  /** Every 30 s, if others are waiting, the peer unchoked longest makes room, so everyone gets a turn. */
+  #rotate(now) {
+    if (now - this.lastRotateAt < ROTATE_MS) return;
+    this.lastRotateAt = now;
+    const someoneWaits = [...this.peers].some((p) => p.wire.peerInterested && p.wire.amChoking);
+    if (!someoneWaits || this.unchoked.size < this.uploadSlots) return this.#unchokeSome();
+    let oldest = null;
+    for (const p of this.unchoked) if (!oldest || p.unchokedAt < oldest.unchokedAt) oldest = p;
+    if (now - oldest.unchokedAt < ROTATE_MS) return;
+    oldest.wire.choke();
+    oldest.requests = []; // a choke drops what was asked
+    this.unchoked.delete(oldest);
+    this.#unchokeSome(oldest);
+  }
+
+  #request(peer, index, begin, length) {
+    if (!this.seed || peer.wire.amChoking || !this.info) return;
+    if (index >= this.info.pieceCount || this.done[index] !== 1) return;
+    if (length === 0 || length > MAX_REQUEST || begin + length > this.info.pieceSize(index)) return;
+    if (peer.requests.length >= MAX_QUEUED_REQUESTS) return;
+    peer.requests.push({ index, begin, length });
+    void this.#serve(peer);
+  }
+
+  /** Answers a peer's requests, a piece at a time; all blocks of one piece leave together. */
+  async #serve(peer) {
+    if (peer.serving) return;
+    peer.serving = true;
+    try {
+      while (peer.requests.length && !peer.wire.closed && !peer.wire.amChoking && !this.stopped) {
+        // A slow peer: let the relay catch up first (the next tick tries again).
+        if (peer.wire.tunnel.buffered > MAX_BUFFERED) break;
+        const index = peer.requests[0].index;
+        const data = await this.#pieceData(index);
+        const now = peer.requests.filter((r) => r.index === index);
+        peer.requests = peer.requests.filter((r) => r.index !== index);
+        if (!data || peer.wire.closed || peer.wire.amChoking || this.stopped) continue;
+        for (const r of now) {
+          peer.wire.piece(r.index, r.begin, data.subarray(r.begin, r.begin + r.length));
+          this.stats.uploadedBytes += r.length;
+        }
+      }
+    } finally {
+      peer.serving = false;
+    }
+  }
+
+  /** A verified piece's bytes, read back from storage (and checked) or from the cache. */
+  #pieceData(index) {
+    const hit = this.pieceCache.get(index);
+    if (hit) {
+      this.pieceCache.delete(index);
+      this.pieceCache.set(index, hit);
+      return hit;
+    }
+    const p = (async () => {
+      const bytes = await this.readPiece(index);
+      if (!bytes || bytes.length !== this.info.pieceSize(index) || !equalBytes(await sha1(bytes), this.info.pieceHash(index))) {
+        this.log(`piece ${index} didn't read back intact; not sharing it`);
+        this.pieceCache.delete(index);
+        return null;
+      }
+      return bytes;
+    })().catch(() => {
+      this.pieceCache.delete(index);
+      return null;
+    });
+    this.#cachePiece(index, p);
+    return p;
+  }
+
+  /** Keeps a few recent pieces (up to 64 MiB) in memory: peers tend to ask for a piece's blocks together. */
+  #cachePiece(index, promise) {
+    this.pieceCache.delete(index);
+    this.pieceCache.set(index, promise);
+    const max = Math.max(2, Math.min(8, Math.floor((64 * 1024 * 1024) / this.info.pieceLength)));
+    while (this.pieceCache.size > max) this.pieceCache.delete(this.pieceCache.keys().next().value);
   }
 }
 

@@ -5,7 +5,8 @@
  *   a fake HTTP tracker points at it, `wrangler dev` runs the relay,
  *   the website is built with ENGINE=browser and opened in Chromium,
  *   and a script clicks through it like a person: set the relay, add torrents,
- *   pick files, download, save, recheck, reload mid-download, remove.
+ *   pick files, download, save, recheck, reload mid-download, remove, and share:
+ *   make a torrent from a folder, which qBittorrent then downloads from the page.
  * Every saved file is compared byte for byte with the original.
  *
  * Needs Docker, linuxserver/qbittorrent:5.2.4, and playwright-core
@@ -168,6 +169,10 @@ try {
   cleanups.push(() => browser.close());
   // The relay here is plain http/ws on localhost, which the page's https/wss policy rightly blocks; the policy itself is checked above.
   const context = await browser.newContext({ bypassCSP: true, acceptDownloads: true });
+  // The public tracker list the page fetches: here, the fake tracker (and a few that don't answer).
+  await context.route(/raw\.githubusercontent\.com\/ngosang/, (route) =>
+    route.fulfill({ contentType: 'text/plain', body: [trackerUrl, ...[1, 2, 3, 4].map((n) => `http://127.0.0.1:${n}/announce`)].join('\n\n') }),
+  );
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -226,7 +231,7 @@ try {
 
   // 6c. Single-file .torrent, with "select files" off: starts by itself.
   await page.getByRole('switch', { name: 'select files' }).click();
-  await page.locator('input[type=file]').setInputFiles(join(work, 'single.torrent'));
+  await page.locator('input[type=file][accept]').setInputFiles(join(work, 'single.torrent'));
   await waitPill('single.bin', 'done');
   const savedS = await save(() => card('single.bin').getByLabel('download', { exact: true }).click());
   check('a dropped .torrent starts on its own and saves intact', savedS.name === 'single.bin' && sha256(savedS.bytes) === sha256(single.blobs[0]));
@@ -278,7 +283,62 @@ try {
   });
   check('removing a torrent deletes its stored files', !left.includes(torrents.big.hash) && left.includes(torrents.pack.hash), left.join(', '));
 
-  // 6g. Settings show the relay and storage.
+  // 6g. Sharing a folder: Sayl makes the torrent and seeds it; qBittorrent downloads it from the page.
+  const shareDir = join(work, 'myshare');
+  mkdirSync(join(shareDir, 'sub'), { recursive: true });
+  const shareA = randomBytes(2 * 1024 * 1024 + 3);
+  const shareB = randomBytes(5000);
+  writeFileSync(join(shareDir, 'a.bin'), shareA);
+  writeFileSync(join(shareDir, 'sub', 'b.txt'), shareB);
+  await page.locator('input[webkitdirectory]').setInputFiles(shareDir);
+  const shareDialog = page.getByRole('dialog');
+  await shareDialog.getByLabel('name', { exact: true }).waitFor({ timeout: 10_000 });
+  check('picking a folder offers to share it, named after the folder', (await shareDialog.getByLabel('name', { exact: true }).inputValue()) === 'myshare');
+  await shareDialog.getByRole('button', { name: 'make torrent' }).click();
+  await shareDialog.getByText('seeding from this tab now').waitFor({ timeout: 60_000 });
+  await shot('shared');
+  const magnet = await shareDialog.locator('#share-magnet').inputValue();
+  const savedTorrent = await save(() => shareDialog.getByRole('button', { name: 'save .torrent file' }).click());
+  const madeTorrent = await parseTorrentFile(new Uint8Array(savedTorrent.bytes));
+  check(
+    'it gives a magnet link and a matching .torrent',
+    magnet.includes(`xt=urn:btih:${madeTorrent.infoHash}`) && savedTorrent.name === 'myshare.torrent' && madeTorrent.trackers.includes(trackerUrl),
+    magnet.slice(0, 70),
+  );
+  await shareDialog.getByRole('button', { name: 'done' }).click();
+  await waitPill('myshare', 'seeding', 10);
+  check('the new torrent is in the list, seeding', true);
+  const qAdd = await fetch(`${qbit}/api/v2/torrents/add`, { method: 'POST', body: new URLSearchParams({ urls: magnet, savepath: '/downloads/fromsayl' }), headers: { cookie } });
+  let qt = null;
+  await until(async () => {
+    qt = (await (await fetch(`${qbit}/api/v2/torrents/info?hashes=${madeTorrent.infoHash}`, { headers: { cookie } })).json())[0];
+    return qt?.progress === 1;
+  }, 120, 'qbittorrent to download from the page').catch(() => {});
+  const fromPage = (...p) => {
+    try {
+      return readFileSync(join(downloads, 'fromsayl', 'myshare', ...p));
+    } catch {
+      return Buffer.alloc(0);
+    }
+  };
+  check('qbittorrent downloads the shared folder from the page, intact', qAdd.ok && qt?.progress === 1 && fromPage('a.bin').equals(shareA) && fromPage('sub', 'b.txt').equals(shareB), qt?.state);
+  await waitPill('myshare', 'done', 60).catch(() => {});
+  const shareSub = await card('myshare').locator('.foot').textContent();
+  check('seeding stops by itself at the ratio limit (1.0)', (await pill('myshare').textContent()) === 'done' && /ratio (1|2)\.\d\d/.test(shareSub ?? ''), shareSub?.replace(/\s+/g, ' '));
+
+  // 6h. Seeding a finished download is opt-in, per torrent; the share dialog has its magnet.
+  check('a finished download does not seed unless asked', (await pill('single.bin').textContent()) === 'done');
+  await card('single.bin').getByLabel('seed', { exact: true }).click();
+  await waitPill('single.bin', 'seeding', 10);
+  await card('single.bin').getByLabel('stop seeding').click();
+  await waitPill('single.bin', 'done', 10);
+  check('the seed button starts and stops seeding', true);
+  await card('single.bin').getByLabel('share').click();
+  const singleMagnet = await page.getByRole('dialog').locator('#share-magnet').inputValue();
+  check('the share dialog gives a torrent\'s magnet', singleMagnet.includes(torrents.single.hash), singleMagnet.slice(0, 60));
+  await page.getByRole('dialog').getByRole('button', { name: 'done' }).click();
+
+  // 6i. Settings show the relay and storage.
   await page.goto(`${siteUrl}/settings`);
   await page.getByText('using').waitFor({ timeout: 10_000 });
   await shot('settings');

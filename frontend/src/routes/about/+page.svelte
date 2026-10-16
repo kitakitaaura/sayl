@@ -32,6 +32,11 @@
         <li>the files sit in your browser's private storage. save them wherever you like.</li>
         <li>remove a torrent to free the space. closing the tab pauses downloads; they pick up again next time.</li>
       </ol>
+      <p>
+        sharing is up to you. turn on <b>seed after</b>, press seed on a finished torrent, or share your own files or a folder: {name} makes the
+        torrent and gives you a magnet link. a shared torrent uploads while this tab is open, until it has given back its ratio limit (set in
+        settings).
+      </p>
     {:else}
       <ol>
         <li>paste a magnet link, or drop a .torrent file.</li>

@@ -51,6 +51,10 @@ export interface Progress {
   size: number | null;
   verifiedBytes: number;
   bytesPerSecond: number;
+  uploadedBytes: number;
+  uploadBytesPerSecond: number;
+  /** everything wanted is in and the download stays up to share */
+  seeding: boolean;
   peersKnown: number;
   peersConnected: number;
   peersUnchoked: number;
@@ -65,6 +69,7 @@ export interface Summary {
   complete: boolean;
   stopReason: string | null;
   verifiedBytes: number;
+  uploadedBytes: number;
   averageMBps: number;
   dht: string;
   [key: string]: unknown;
@@ -82,6 +87,12 @@ export interface DownloadOptions {
   wanted?: 'all' | Uint8Array | null;
   have?: Uint8Array | null;
   sequential?: boolean;
+  /** share too: answer requests for the pieces we have, and keep seeding once complete, until stop() */
+  seed?: boolean;
+  /** reads a verified piece back from storage; needed with `seed` */
+  read?: ((piece: number) => Promise<Uint8Array | null>) | null;
+  /** peers unchoked at once while sharing (default 4) */
+  uploadSlots?: number;
   log?: (line: string) => void;
 }
 
@@ -94,6 +105,8 @@ export class Download {
   onprogress: ((p: Progress) => void) | null;
   onmetadata: ((info: Info) => void) | null;
   onpiece: ((piece: number) => void) | null;
+  oncomplete: (() => void) | null;
+  readonly seeding: boolean;
   start(): Promise<Summary>;
   stop(reason?: string): void;
   select(wanted: Uint8Array): void;
@@ -117,3 +130,26 @@ export function fileProgress(info: Info, have: Uint8Array): number[];
 export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
 export function loadPublicTrackers(options?: { timeoutMs?: number }): Promise<string[]>;
+
+export interface CreatedTorrent {
+  infoHash: string;
+  info: Info;
+  /** the .torrent file */
+  torrent: Uint8Array;
+  magnet: string;
+}
+/** Makes a v1 torrent. One file: a single-file torrent named after it; more: a folder called `name`. */
+export function createTorrent(options: {
+  name?: string;
+  files: { path: string[]; blob: Blob }[];
+  trackers?: string[];
+  pieceLength?: number;
+  onprogress?: (hashedBytes: number, totalBytes: number) => void;
+  signal?: AbortSignal;
+  createdBy?: string;
+}): Promise<CreatedTorrent>;
+export function pickPieceLength(totalBytes: number): number;
+/** A .torrent file around an info dict's exact bytes. */
+export function torrentFile(infoRaw: Uint8Array, trackers?: string[], options?: { createdBy?: string; createdAt?: number }): Uint8Array;
+/** A magnet link with the name, size and up to 10 trackers. */
+export function magnetLink(infoHash: string, name: string, length?: number, trackers?: string[]): string;

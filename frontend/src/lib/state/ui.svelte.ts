@@ -5,10 +5,20 @@ export interface Intent {
   sequential: boolean;
 }
 
+/** A file picked or dropped to share, with its path relative to what was picked ("folder/a.txt" or "a.txt"). */
+export interface PickedFile {
+  file: File;
+  path: string;
+}
+
 export type DialogState =
   | { kind: 'files'; hash: string; intent: Intent }
   | { kind: 'download'; hash: string }
   | { kind: 'remove'; hash: string }
+  /** browser engine: make a torrent from these files */
+  | { kind: 'create'; entries: PickedFile[] }
+  /** browser engine: a torrent's magnet link and .torrent file */
+  | { kind: 'share'; hash: string }
   | { kind: 'confirm'; title: string; text: string; label: string; run: () => Promise<void> }
   | null;
 
