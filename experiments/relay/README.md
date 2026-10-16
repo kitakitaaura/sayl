@@ -88,29 +88,31 @@ Then look at the Cloudflare dashboard → **Workers & Pages → sayl-relay → M
 
 ## The DHT, through TURN
 
-Workers have no UDP, so the DHT (which finds peers for bare magnets and niche torrents) needs a detour. TURN, a service made for video calls, relays UDP. The client reaches Cloudflare's TURN server through the relay over TCP and uses it to talk to the DHT:
+Workers have no UDP, so the DHT (which finds peers for bare magnets and niche torrents) needs a detour. TURN, a service made for video calls, relays UDP. The client reaches a TURN server through the relay over TCP and uses it to talk to the DHT:
 
 ```
-browser ── relay (TCP) ── Cloudflare TURN ── UDP ──► DHT nodes
+browser ── relay (TCP) ── TURN server ── UDP ──► DHT nodes
 ```
 
-Cloudflare's TURN has 1,000 GB a month free; DHT lookups are a few KB each. Tested locally against coturn (a real TURN server), a DHT node and qBittorrent: lookup through the relay, then a full download from peers found only through the DHT.
+What's been tested for real:
 
-To test it for real:
+- **Cloudflare's TURN relays DHT traffic.** Straight from a Mac, a lookup found 105 peers for Debian in 9 seconds.
+- **But Workers can't reach Cloudflare's own TURN servers**, on any port. So the relay needs a TURN provider outside Cloudflare. `TURN_HOSTS` in `wrangler.toml` lists the ones allowed (Metered and Xirsys by default).
 
-1. Cloudflare dashboard → **Realtime → TURN → Create** a TURN key. Note its **key ID** and **API token**. If it asks for a card, stop and tell me.
-2. Redeploy the relay so it allows TURN: `npx wrangler deploy`.
-3. Run:
+DHT lookups are small (about 15 KB each), so a free tier of a few hundred MB a month covers tens of thousands of lookups.
+
+To test with Metered (free, no card):
+
+1. Sign up at metered.ca, open the TURN server section, and copy a `turn:…?transport=tcp` or `turns:…:443` address, the username and the credential.
+2. If the address's host isn't covered by `TURN_HOSTS`, add it there. Then redeploy: `npx wrangler deploy`.
+3. Run, filling in the values (don't paste them anywhere):
 
 ```sh
-TURN_KEY_ID=… TURN_API_TOKEN=…
-# a. Does Cloudflare's TURN reach the DHT at all? (from your Mac, no relay)
-node cli/turn-check.mjs --direct --turn-key-id $TURN_KEY_ID --turn-api-token $TURN_API_TOKEN
-# b. The real thing: through the relay, then a 20 MB download from DHT-only peers
-node cli/turn-check.mjs --relay $RELAY --token $TOKEN --turn-key-id $TURN_KEY_ID --turn-api-token $TURN_API_TOKEN
+# a. Does this TURN server reach the DHT? (from your computer, no relay)
+node cli/turn-check.mjs --direct --turn-url "turns:HOST:443?transport=tcp" --username USER --password CREDENTIAL
+# b. Through the relay, then a 20 MB download from DHT-only peers
+node cli/turn-check.mjs --relay $RELAY --token $TOKEN --turn-url "turns:HOST:443?transport=tcp" --username USER --password CREDENTIAL
 ```
-
-If **a** works and **b** can't connect, Workers aren't allowed to reach Cloudflare's own TURN servers; another TURN provider would then be needed.
 
 ## Known limits
 

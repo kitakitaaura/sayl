@@ -15,7 +15,7 @@
  */
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
-import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
+import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, isTurnHost, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
 
 export default {
   async fetch(request, env) {
@@ -55,7 +55,7 @@ function openTunnel(url, env) {
   server.accept();
   // Newer compatibility dates deliver binary messages as Blobs unless told otherwise.
   server.binaryType = 'arraybuffer';
-  relay(server, target, turnHosts(env.TURN_HOSTS).has(target.host));
+  relay(server, target, isTurnHost(target.host, turnHosts(env.TURN_HOSTS)));
   return new Response(null, { status: 101, webSocket: client });
 }
 

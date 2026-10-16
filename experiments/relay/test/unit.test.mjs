@@ -118,4 +118,11 @@ test('relay policy: turn', async () => {
   assert.ok(!isTurnAllocate(binding), 'a binding request is not an allocate');
   assert.deepEqual([...turnHosts(undefined)], ['turn.cloudflare.com']);
   assert.deepEqual([...turnHosts(' A.example , b.example ')], ['a.example', 'b.example']);
+  const { isTurnHost } = await import('../worker/policy.js');
+  const hosts = turnHosts('turn.example.org,*.relay.example.com');
+  assert.ok(isTurnHost('turn.example.org', hosts));
+  assert.ok(isTurnHost('global.relay.example.com', hosts));
+  assert.ok(!isTurnHost('relay.example.com', hosts), 'the bare parent is not a subdomain');
+  assert.ok(!isTurnHost('evilrelay.example.com', hosts));
+  assert.ok(!isTurnHost('x.relay.example.com.evil.net', hosts));
 });

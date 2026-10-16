@@ -57,6 +57,13 @@ export function turnHosts(setting) {
   );
 }
 
+/** True when host is in the list; "*.example.com" matches any subdomain of example.com. */
+export function isTurnHost(host, hosts) {
+  if (hosts.has(host)) return true;
+  for (const h of hosts) if (h.startsWith('*.') && host.endsWith(h.slice(1)) && host.length > h.length - 1) return true;
+  return false;
+}
+
 export function latin1(bytes) {
   let s = '';
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
