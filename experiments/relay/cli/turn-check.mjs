@@ -18,6 +18,8 @@
  *   --turn-api-token <t>     Cloudflare TURN key token   (or env TURN_API_TOKEN)
  *   --direct                 connect to TURN from this computer, not through the relay
  *   --turn-url <url>         use this TURN server instead, e.g. turn:host:3478?transport=tcp
+ *   --turn-ip <ip>           connect to this IP address instead of the TURN server's name
+ *                            (repeatable; plain TCP only, since TLS needs the name)
  *   --username/--password    credentials for --turn-url
  *   --info-hash <hex>        torrent to look up (default: Debian 13.7.0 netinst)
  *   --bootstrap <host:port>  DHT node to start from (repeatable; default: the public routers)
@@ -43,6 +45,7 @@ const { values: o } = parseArgs({
     'turn-api-token': { type: 'string', default: process.env.TURN_API_TOKEN },
     direct: { type: 'boolean', default: false },
     'turn-url': { type: 'string' },
+    'turn-ip': { type: 'string', multiple: true, default: [] },
     username: { type: 'string' },
     password: { type: 'string' },
     'info-hash': { type: 'string', default: '7acf8fb590b2060dd9c3146ef770169d593433b0' },
@@ -69,6 +72,16 @@ if (o['turn-url']) {
   if (!o['turn-key-id'] || !o['turn-api-token']) fail('pass --turn-key-id and --turn-api-token (Cloudflare dashboard → Realtime → TURN)');
   servers = await cloudflareTurn(o['turn-key-id'], o['turn-api-token']);
   ok(`got TURN credentials from Cloudflare (${servers.length} TCP/TLS servers: ${servers.map((c) => c.url.replace(/\?.*/, '')).join(', ')})`);
+}
+
+if (o['turn-ip'].length) {
+  // Same credentials, but aimed at raw IP addresses over plain TCP.
+  const plain = servers.filter((c) => /^turn:.*transport=tcp/.test(c.url));
+  if (!plain.length) fail('no plain-TCP TURN address to aim at an IP');
+  servers = o['turn-ip'].flatMap((ip) =>
+    plain.map((c) => ({ ...c, url: c.url.replace(/^turn:[^:?]+/, `turn:${ip.includes(':') ? `[${ip}]` : ip}`) })),
+  );
+  info(`trying by IP: ${servers.map((c) => c.url.replace(/\?.*/, '')).join(', ')}`);
 }
 
 // 2–3. Connect (trying each server until one works) and allocate.
@@ -181,9 +194,9 @@ async function cloudflareTurn(keyId, apiToken) {
 }
 
 function parseTurnUrl(url) {
-  const m = /^(turns?):([^:?]+):(\d+)/.exec(url);
+  const m = /^(turns?):(\[[^\]]+\]|[^:?]+):(\d+)/.exec(url);
   if (!m) fail(`can't read the TURN url ${url}`);
-  return { host: m[2], port: Number(m[3]), tls: m[1] === 'turns' };
+  return { host: m[2].replace(/^\[|\]$/g, ''), port: Number(m[3]), tls: m[1] === 'turns' };
 }
 
 function splitHostPort(s) {
