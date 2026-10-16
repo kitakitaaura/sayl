@@ -40,18 +40,20 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
-      if (url.pathname === '/api/relay/available') {
+      // a trailing slash (or a pasted link that picked one up) still finds the route
+      const path = url.pathname.replace(/\/+$/, '');
+      if (path === '/api/relay/available') {
         return Response.json({ available: configured(env), dht: hasTurnLogins(env) }, { headers: { 'cache-control': 'no-store' } });
       }
-      if (url.pathname === '/api/turn') {
+      if (path === '/api/turn') {
         // same-origin only: no CORS headers, so other sites' pages can't read it
         const { status, body } = await turnLogins(env);
         return Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
       }
-      if (url.pathname === '/api/relay/connect') return await connect(url, env);
-      if (url.pathname === '/api/relay/callback') return await callback(request, url, env);
-      if (url.pathname === '/api/relay/check') return await check(url, env);
-      if (url.pathname.startsWith('/api/')) return Response.json({ error: 'not found' }, { status: 404 });
+      if (path === '/api/relay/connect') return await connect(url, env);
+      if (path === '/api/relay/callback') return await callback(request, url, env);
+      if (path === '/api/relay/check') return await check(url, env);
+      if (path.startsWith('/api/')) return Response.json({ error: 'not found', path: url.pathname }, { status: 404 });
     } catch (err) {
       return home(url, { 'relay-error': err instanceof SetupError ? err.message : 'something went wrong setting up your relay. try again.' });
     }

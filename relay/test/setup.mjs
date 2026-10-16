@@ -199,6 +199,12 @@ try {
   await until(async () => (await fetch(`${siteUrl}/api/relay/available`)).ok, 90, 'the website worker');
   const availableBody = await (await fetch(`${siteUrl}/api/relay/available`)).json();
   check('the site says automatic setup and the DHT are available', availableBody.available === true && availableBody.dht === true);
+  const slash = await fetch(`${siteUrl}/api/relay/available/`);
+  const missing = await fetch(`${siteUrl}/api/relay/nope`);
+  check(
+    'a trailing slash still finds the route; an unknown one says which path it got',
+    slash.ok && (await slash.json()).available === true && missing.status === 404 && (await missing.json()).path === '/api/relay/nope',
+  );
   const turn1 = await (await fetch(`${siteUrl}/api/turn`)).json();
   const turn2Res = await fetch(`${siteUrl}/api/turn`);
   const turn2 = await turn2Res.json();
