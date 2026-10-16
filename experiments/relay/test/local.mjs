@@ -23,7 +23,7 @@ import { decode, encode } from '../public/client/bencode.js';
 import { Dht } from '../public/client/dht.js';
 import { Download } from '../public/client/download.js';
 import { fromHex, parseTorrentFile } from '../public/client/torrent.js';
-import { TurnClient } from '../public/client/turn.js';
+import { TurnClient, fetchTurnServers } from '../public/client/turn.js';
 import { openTunnel } from '../public/client/tunnel.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -118,8 +118,30 @@ try {
   }, 60, 'qbittorrent seeding');
   check('qbittorrent is seeding the test file', true);
 
+  // A TURN server for the DHT tests (step 9), if coturn is installed. The relay hands out its login.
+  let hasCoturn = true;
+  try {
+    execFileSync('which', ['turnserver'], { stdio: 'ignore' });
+  } catch {
+    hasCoturn = false;
+  }
+  const turnPort = 13478;
+  const turnUser = 'sayl';
+  const turnPass = randomBytes(8).toString('hex');
+  if (hasCoturn) {
+    const coturn = spawn('turnserver', [
+      '-n', '--listening-ip', '127.0.0.1', '--relay-ip', '127.0.0.1', '--listening-port', String(turnPort),
+      '--lt-cred-mech', '--user', `${turnUser}:${turnPass}`, '--realm', 'sayl.test',
+      '--allow-loopback-peers', '--no-tls', '--no-dtls', '--no-cli', '--log-file', 'stdout', '--simple-log',
+    ], { stdio: 'ignore' });
+    cleanups.push(() => coturn.kill('SIGTERM'));
+  }
+  const turnVars = hasCoturn
+    ? ['--var', `TURN_URLS:turn:127.0.0.1:${turnPort}?transport=tcp`, '--var', `TURN_USERNAME:${turnUser}`, '--var', `TURN_CREDENTIAL:${turnPass}`]
+    : [];
+
   // 4. The relay, running locally.
-  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1', '--var', 'TURN_HOSTS:127.0.0.1'], {
+  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1', '--var', 'TURN_HOSTS:127.0.0.1', ...turnVars], {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -204,12 +226,6 @@ try {
   }
 
   // 9. The DHT over TURN, through the relay (skipped unless coturn is installed).
-  let hasCoturn = true;
-  try {
-    execFileSync('which', ['turnserver'], { stdio: 'ignore' });
-  } catch {
-    hasCoturn = false;
-  }
   if (!hasCoturn) {
     console.log('skip the DHT over TURN (install coturn to run it)');
   } else {
@@ -234,16 +250,6 @@ try {
     await new Promise((r) => node.bind(0, '127.0.0.1', r));
     cleanups.push(() => node.close());
 
-    const turnPort = 13478;
-    const turnUser = 'sayl';
-    const turnPass = randomBytes(8).toString('hex');
-    const coturn = spawn('turnserver', [
-      '-n', '--listening-ip', '127.0.0.1', '--relay-ip', '127.0.0.1', '--listening-port', String(turnPort),
-      '--lt-cred-mech', '--user', `${turnUser}:${turnPass}`, '--realm', 'sayl.test',
-      '--allow-loopback-peers', '--no-tls', '--no-dtls', '--no-cli', '--log-file', 'stdout', '--simple-log',
-    ], { stdio: 'ignore' });
-    cleanups.push(() => coturn.kill('SIGTERM'));
-    await new Promise((r) => setTimeout(r, 1500));
 
     const relay = { url: relayUrl, via: 'do', session: randomBytes(12).toString('base64url') };
     const allocate = new Uint8Array([0, 3, 0, 8, 0x21, 0x12, 0xa4, 0x42, ...randomBytes(12), 0, 0x19, 0, 4, 17, 0, 0, 0]);
@@ -261,17 +267,33 @@ try {
     check('DHT lookup through TURN finds the seeder', found.peers.some((p) => p.port === QBIT_PORT), `${found.peers.length} peers, ${dhtQueries} queries`);
     turn.close();
 
-    const out = new Uint8Array(SIZE);
-    const d = new Download({
-      relay,
-      source: { infoHash: torrent.infoHash, trackers: [], peers: found.peers.map((p) => `${p.host}:${p.port}`) },
-      sink: { write: (offset, b) => out.set(b, offset) },
-      extraTrackers: false,
-    });
-    const timer = setTimeout(() => d.stop('time limit'), 120_000);
-    const s = await d.start();
-    clearTimeout(timer);
-    check('bare magnet + DHT only: complete and identical', s.complete && createHash('sha256').update(out).digest('hex') === payloadSha, `${s.averageMBps.toFixed(1)} MB/s`);
+    const logins = await fetchTurnServers(relay);
+    check('the relay hands out the TURN login', logins.length === 1 && logins[0].username === turnUser);
+
+    const run = async (label, source, dht, seconds = 120) => {
+      const out = new Uint8Array(SIZE);
+      const d = new Download({ relay: { ...relay, session: randomBytes(12).toString('base64url') }, source, sink: { write: (offset, b) => out.set(b, offset) }, extraTrackers: false, dht });
+      const timer = setTimeout(() => d.stop('time limit'), seconds * 1000);
+      const summary = await d.start();
+      clearTimeout(timer);
+      return { summary, ok: summary.complete && createHash('sha256').update(out).digest('hex') === payloadSha };
+    };
+    const dhtOptions = { getTurn: () => fetchTurnServers(relay), bootstrap };
+
+    const viaTracker = await run('tracker', { infoHash: torrent.infoHash, trackers: [trackerUrl], peers: [] }, dhtOptions);
+    check('the DHT stays unused when trackers find peers', viaTracker.ok && viaTracker.summary.dht === 'not needed', viaTracker.summary.dht);
+
+    const queriesBefore = dhtQueries;
+    const bare = await run('bare', { infoHash: torrent.infoHash, trackers: [], peers: [] }, dhtOptions);
+    check(
+      'bare magnet, no trackers: the DHT is the last resort and the file arrives intact',
+      bare.ok && /^found [1-9]/.test(bare.summary.dht) && bare.summary.peersFrom.dht >= 1 && dhtQueries > queriesBefore,
+      `${bare.summary.dht}, ${bare.summary.averageMBps.toFixed(1)} MB/s`,
+    );
+
+    // Last, because a refused login switches the DHT off for this process for an hour.
+    const broken = await run('broken', { infoHash: torrent.infoHash, trackers: [], peers: [] }, { getTurn: async () => [{ ...logins[0], credential: 'wrong' }], bootstrap }, 25);
+    check('a refused TURN login is handled: no crash, the download just has no DHT', broken.summary.stopReason === 'time limit' && /^unavailable: TURN refused/.test(broken.summary.dht), broken.summary.dht);
   }
 } catch (err) {
   check(`unexpected error: ${err.message}`, false);

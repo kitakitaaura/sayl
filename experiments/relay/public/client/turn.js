@@ -38,6 +38,34 @@ export class TurnError extends Error {
   }
 }
 
+/** "turns:host:443?transport=tcp" → { host, port, tls }, or null for UDP-only addresses. */
+export function parseTurnUrl(url) {
+  const m = /^(turns?):(\[[^\]]+\]|[^:?]+)(?::(\d+))?(?:\?(.*))?$/.exec(url);
+  if (!m) return null;
+  const tls = m[1] === 'turns';
+  if (!tls && !/transport=tcp/.test(m[4] ?? '')) return null; // the relay only carries TCP
+  return { host: m[2].replace(/^\[|\]$/g, ''), port: Number(m[3]) || (tls ? 5349 : 3478), tls };
+}
+
+/**
+ * Asks the relay for short-lived TURN logins (it holds the operator's TURN
+ * account). Returns [{ url, username, credential }], TLS on 443 first.
+ */
+export async function fetchTurnServers(relay) {
+  const u = new URL('/turn-credentials', relay.url);
+  if (relay.token) u.searchParams.set('token', relay.token);
+  let res;
+  try {
+    res = await fetch(u, { signal: AbortSignal.timeout(10_000) });
+  } catch (err) {
+    throw new TurnError(`couldn't get TURN logins: ${err.message}`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new TurnError(body.error ?? `couldn't get TURN logins (${res.status})`, res.status === 503 ? 'off' : res.status);
+  const rank = (s) => (/^turns:.*:443\b/.test(s.url) ? 0 : /^turns:/.test(s.url) ? 1 : 2);
+  return (body.servers ?? []).filter((s) => parseTurnUrl(s.url)).sort((a, b) => rank(a) - rank(b));
+}
+
 /** Builds a STUN message. attrs: [[type, Uint8Array]] */
 export function stunMessage(type, attrs, txid = crypto.getRandomValues(new Uint8Array(12))) {
   const body = [];

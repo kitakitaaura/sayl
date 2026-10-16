@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * Can the browser client reach the DHT? This checks, step by step:
- *   1. get TURN credentials from Cloudflare (Realtime → TURN key)
+ *   1. get TURN credentials (from the relay's /turn-credentials by default)
  *   2. open a TCP connection to Cloudflare's TURN server through the relay
  *   3. allocate a UDP address there
  *   4. ping the DHT's bootstrap nodes through it
  *   5. look up peers for a torrent in the DHT
  *   6. download a few MB from peers found only through the DHT
  *
- *   node cli/turn-check.mjs --relay $RELAY --token $TOKEN --turn-key-id $TURN_KEY_ID --turn-api-token $TURN_API_TOKEN
+ *   node cli/turn-check.mjs --relay $RELAY --token $TOKEN
  *
  * options:
  *   --relay <url>            relay address (leave out with --direct)
@@ -33,7 +33,7 @@ import { parseArgs } from 'node:util';
 import { BOOTSTRAP, Dht } from '../public/client/dht.js';
 import { Download } from '../public/client/download.js';
 import { fromHex } from '../public/client/torrent.js';
-import { TurnClient } from '../public/client/turn.js';
+import { TurnClient, fetchTurnServers } from '../public/client/turn.js';
 import { openTunnel } from '../public/client/tunnel.js';
 
 const { values: o } = parseArgs({
@@ -68,10 +68,18 @@ const relay = o.relay ? { url: o.relay, via: o.via, session: randomBytes(12).toS
 let servers;
 if (o['turn-url']) {
   servers = [{ url: o['turn-url'], username: o.username, credential: o.password }];
-} else {
-  if (!o['turn-key-id'] || !o['turn-api-token']) fail('pass --turn-key-id and --turn-api-token (Cloudflare dashboard → Realtime → TURN)');
+} else if (o['turn-key-id'] && o['turn-api-token']) {
   servers = await cloudflareTurn(o['turn-key-id'], o['turn-api-token']);
   ok(`got TURN credentials from Cloudflare (${servers.length} TCP/TLS servers: ${servers.map((c) => c.url.replace(/\?.*/, '')).join(', ')})`);
+} else {
+  if (!relay) fail('pass --relay, --turn-url, or --turn-key-id and --turn-api-token');
+  try {
+    servers = await fetchTurnServers(relay);
+  } catch (err) {
+    fail(`the relay gave no TURN login: ${err.message}`);
+  }
+  if (!servers.length) fail('the relay gave no usable TURN server');
+  ok(`got a TURN login from the relay (${servers.map((c) => c.url.replace(/\?.*/, '')).join(', ')})`);
 }
 
 if (o['turn-ip'].length) {

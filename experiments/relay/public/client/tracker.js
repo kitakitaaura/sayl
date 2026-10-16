@@ -1,13 +1,11 @@
 /**
  * HTTP(S) tracker announces, sent through a relay tunnel. Workers can't use
  * UDP, so a udp:// tracker is tried over HTTP on the same host and port
- * (many big trackers, opentrackr among them, answer both).
+ * (many big trackers, opentrackr among them, answer both). The public
+ * trackers asked for every torrent are in public-trackers.js.
  */
 import { decode, text } from './bencode.js';
 import { openTunnel } from './tunnel.js';
-
-/** Public trackers tried for every torrent, on top of the torrent's own. */
-export const EXTRA_TRACKERS = ['http://tracker.opentrackr.org:1337/announce'];
 
 /** Turns tracker URLs into unique HTTP(S) announce URLs. */
 export function announceUrls(trackers) {

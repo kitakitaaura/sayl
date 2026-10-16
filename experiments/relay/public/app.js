@@ -1,5 +1,6 @@
 import { Download } from './client/download.js';
 import { parseMagnet, parseTorrentFile } from './client/torrent.js';
+import { fetchTurnServers } from './client/turn.js';
 
 const $ = (id) => document.getElementById(id);
 const log = (line) => {
@@ -40,6 +41,7 @@ $('start').addEventListener('click', async () => {
       sink,
       maxPeers: Number($('peers').value) || 40,
       limitBytes: testOnly ? Number($('limit').value) * 1e6 : Infinity,
+      dht: { getTurn: () => fetchTurnServers(relay) },
       log,
     });
     current = d;

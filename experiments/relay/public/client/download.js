@@ -8,19 +8,34 @@
  *
  * source: { infoHash (hex), trackers, peers: ['host:port'], info? }
  * sink:   { open(info), write(offset, bytes), close() } — writes may arrive in any order
+ * dht:    { getTurn: async () => [{ url, username, credential }], bootstrap? } — optional
+ *
+ * Finding peers, in order: the torrent's own trackers and the public HTTP
+ * trackers (right away), then PEX from connected peers, and only if all of
+ * that leaves us with nobody to talk to, a DHT lookup through TURN. If the
+ * DHT is unavailable (not set up, quota used up, server down) the download
+ * carries on with what it has.
  */
 import { MSG, EXT, Wire, parseMetadataMessage, parsePex } from './wire.js';
-import { announce, announceUrls, EXTRA_TRACKERS } from './tracker.js';
+import { announce, announceUrls } from './tracker.js';
+import { loadPublicTrackers } from './public-trackers.js';
 import { openTunnel } from './tunnel.js';
 import { equalBytes, fromHex, hex, parseInfo, sha1 } from './torrent.js';
+import { TurnClient, TurnError, parseTurnUrl } from './turn.js';
+import { Dht, resolveBootstrap } from './dht.js';
 
 const BLOCK = 16 * 1024;
 const METADATA_PIECE = 16 * 1024;
 const MAX_METADATA = 16 * 1024 * 1024;
 const SNUB_MS = 20_000;
+const MAX_ANNOUNCING = 12;
+const DHT_AFTER_MS = 15_000; // give trackers and PEX this long before trying the DHT
+const DHT_RETRY_MS = 10 * 60_000;
+/** Shared by every download on the page: when the DHT failed in a way that won't fix itself soon. */
+let dhtOffUntil = 0;
 
 export class Download {
-  constructor({ relay, source, sink, maxPeers = 40, pipeline = 64, limitBytes = Infinity, extraTrackers = true, log = () => {} }) {
+  constructor({ relay, source, sink, maxPeers = 40, pipeline = 64, limitBytes = Infinity, extraTrackers = true, dht = null, log = () => {} }) {
     this.relay = relay;
     this.source = source;
     this.sink = sink;
@@ -30,7 +45,12 @@ export class Download {
     this.log = log;
     this.infoHash = fromHex(source.infoHash);
     this.peerId = new TextEncoder().encode(`-SY0001-${Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join('')}`);
-    this.trackers = announceUrls([...(source.trackers ?? []), ...(extraTrackers ? EXTRA_TRACKERS : [])]);
+    this.extraTrackers = extraTrackers;
+    this.dhtOptions = dht;
+    this.trackers = new Map(); // url → { nextAt, failures, busy }
+    this.announcing = 0;
+    this.dhtRunning = false;
+    this.dhtNextAt = 0;
     this.info = null;
     this.known = new Map(); // "host:port" → { host, port, tried }
     this.peers = new Set();
@@ -51,6 +71,8 @@ export class Download {
       handshaken: 0,
       failures: {},
       trackers: {},
+      dht: dht ? 'not needed' : 'off',
+      dhtLookups: 0,
     };
     this.metadata = null; // { size, pieces: [], got }
     this.active = new Map(); // piece → { buf, blocks: Uint8Array (0 free, 1 requested, 2 received), left, by: Map(block → Set(peer)) }
@@ -66,9 +88,10 @@ export class Download {
     this.finished = new Promise((resolve) => (this.#resolve = resolve));
     if (this.source.info) await this.#setInfo(this.source.info);
     for (const p of this.source.peers ?? []) this.#addPeer(p, 'given');
-    this.#announceAll('started');
+    this.#addTrackers(this.source.trackers ?? []);
+    if (this.extraTrackers) loadPublicTrackers().then((list) => this.#addTrackers(list));
+    this.#announceDue();
     this.ticker = setInterval(() => this.#tick(), 1000);
-    this.announcer = setInterval(() => this.#announceAll(), 60_000);
     return this.finished;
   }
 
@@ -79,7 +102,6 @@ export class Download {
     this.stopped = true;
     this.stopReason = reason;
     clearInterval(this.ticker);
-    clearInterval(this.announcer);
     for (const p of this.peers) p.wire.close('download stopped');
     Promise.resolve(this.info ? this.sink.close?.() : undefined).finally(() => this.#resolve(this.summary()));
   }
@@ -109,6 +131,8 @@ export class Download {
       peersHandshaken: s.handshaken,
       connectFailures: s.failures,
       trackers: s.trackers,
+      dht: s.dht,
+      peersFrom: [...this.known.values()].reduce((o, k) => ((o[k.from] = (o[k.from] ?? 0) + 1), o), {}),
     };
   }
 
@@ -123,25 +147,104 @@ export class Download {
     this.stats.found++;
   }
 
-  async #announceAll(event) {
+  #addTrackers(urls) {
+    for (const url of announceUrls(urls)) if (!this.trackers.has(url)) this.trackers.set(url, { nextAt: 0, failures: 0, busy: false });
+    this.#announceDue();
+  }
+
+  /** Announces to the trackers that are due, a few at a time, each on its own schedule. */
+  #announceDue() {
     if (this.stopped) return;
-    const left = this.info ? this.remaining * this.info.pieceLength : 1;
-    await Promise.all(
-      this.trackers.map(async (url) => {
-        try {
-          const r = await announce(this.relay, url, { infoHash: this.infoHash, peerId: this.peerId, left, downloaded: this.stats.verifiedBytes, event });
+    const now = Date.now();
+    for (const [url, t] of this.trackers) {
+      if (this.announcing >= MAX_ANNOUNCING) break;
+      if (t.busy || t.nextAt > now) continue;
+      t.busy = true;
+      this.announcing++;
+      const left = this.info ? this.remaining * this.info.pieceLength : 1;
+      const event = t.announced ? undefined : 'started';
+      announce(this.relay, url, { infoHash: this.infoHash, peerId: this.peerId, left, downloaded: this.stats.verifiedBytes, event })
+        .then((r) => {
+          t.announced = true;
+          t.failures = 0;
           this.stats.trackers[url] = `${r.peers.length} peers`;
           for (const p of r.peers) this.#addPeer(p, 'tracker');
-        } catch (err) {
+          // Ask again at the tracker's own pace, between 5 and 30 minutes.
+          t.nextAt = Date.now() + Math.min(Math.max(r.interval, 300), 1800) * 1000;
+        })
+        .catch((err) => {
+          t.failures++;
           this.stats.trackers[url] = `failed: ${err.message}`;
-        }
-      }),
-    );
+          t.nextAt = t.failures >= 2 ? Infinity : Date.now() + 10 * 60_000;
+        })
+        .finally(() => {
+          t.busy = false;
+          this.announcing--;
+          this.#announceDue();
+        });
+    }
+  }
+
+  /** The last resort: only when trackers and PEX have left us with no one to connect to. */
+  #maybeDht(now) {
+    if (!this.dhtOptions || this.dhtRunning || now < this.dhtNextAt) return;
+    const waited = now - this.stats.started;
+    // Wait for the trackers' answers, but not forever: a slow tracker shouldn't hold the DHT back.
+    if (waited < DHT_AFTER_MS || (this.announcing > 0 && waited < 45_000)) return;
+    if (this.peers.size > 0 || this.connecting > 0) return;
+    for (const k of this.known.values()) if (!k.tried) return;
+    if (now < dhtOffUntil) {
+      this.stats.dht = 'off for now (an earlier lookup failed)';
+      return;
+    }
+    this.#runDht();
+  }
+
+  async #runDht() {
+    this.dhtRunning = true;
+    this.stats.dhtLookups++;
+    this.stats.dht = 'looking up';
+    this.log('no peers from trackers, asking the DHT');
+    let turn = null;
+    try {
+      const servers = await this.dhtOptions.getTurn();
+      if (!servers?.length) throw new TurnError('no TURN server is set up', 'off');
+      let stream = null;
+      let server = null;
+      for (const s of servers) {
+        const target = parseTurnUrl(s.url);
+        if (!target) continue;
+        try {
+          stream = await openTunnel(this.relay, target);
+          server = s;
+          break;
+        } catch {}
+      }
+      if (!stream) throw new TurnError("couldn't reach the TURN server");
+      turn = await TurnClient.connect(stream, { username: server.username, password: server.credential });
+      const dht = new Dht(turn);
+      const bootstrap = this.dhtOptions.bootstrap ?? (await resolveBootstrap());
+      const r = await dht.getPeers(this.infoHash, bootstrap, { enough: 60 });
+      for (const p of r.peers) this.#addPeer(p, 'dht');
+      this.stats.dht = `found ${r.peers.length} peers`;
+      this.log(`the DHT found ${r.peers.length} peers`);
+    } catch (err) {
+      this.stats.dht = `unavailable: ${err.message}`;
+      this.log(`the DHT is unavailable (${err.message}); carrying on without it`);
+      // Out of quota, refused, or not set up: don't keep trying for an hour.
+      if (err instanceof TurnError && [401, 403, 486, 508, 'off', 'quota'].includes(err.code)) dhtOffUntil = Date.now() + 60 * 60_000;
+    } finally {
+      turn?.close();
+      this.dhtRunning = false;
+      this.dhtNextAt = Date.now() + DHT_RETRY_MS;
+    }
   }
 
   #tick() {
     if (this.stopped) return;
     const now = Date.now();
+    this.#announceDue();
+    this.#maybeDht(now);
     // Open more connections, a few at a time.
     let budget = 10;
     for (const [key, k] of this.known) {

@@ -126,3 +126,18 @@ test('relay policy: turn', async () => {
   assert.ok(!isTurnHost('evilrelay.example.com', hosts));
   assert.ok(!isTurnHost('x.relay.example.com.evil.net', hosts));
 });
+
+test('turn urls: only TCP or TLS ones are usable through the relay', async () => {
+  const { parseTurnUrl } = await import('../public/client/turn.js');
+  assert.deepEqual(parseTurnUrl('turns:standard.relay.metered.ca:443?transport=tcp'), { host: 'standard.relay.metered.ca', port: 443, tls: true });
+  assert.deepEqual(parseTurnUrl('turn:standard.relay.metered.ca:80?transport=tcp'), { host: 'standard.relay.metered.ca', port: 80, tls: false });
+  assert.equal(parseTurnUrl('turn:standard.relay.metered.ca:80'), null, 'UDP');
+  assert.equal(parseTurnUrl('stun:stun.example.org:3478'), null);
+});
+
+test('the bundled public trackers are all HTTP(S) announce urls', async () => {
+  const { BUNDLED_TRACKERS } = await import('../public/client/public-trackers.js');
+  assert.ok(BUNDLED_TRACKERS.length >= 20);
+  for (const t of BUNDLED_TRACKERS) assert.match(t, /^https?:\/\/[^/]+\/announce$/);
+  assert.equal(new Set(BUNDLED_TRACKERS).size, BUNDLED_TRACKERS.length);
+});

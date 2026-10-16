@@ -12,6 +12,32 @@ export const BOOTSTRAP = [
   { host: 'dht.libtorrent.org', port: 25401 },
 ];
 
+/** Last known addresses of the bootstrap nodes, used if DNS lookups fail. */
+const BOOTSTRAP_IPS = [
+  { host: '212.129.33.59', port: 6881 },
+  { host: '185.157.221.247', port: 25401 },
+  { host: '67.215.246.10', port: 6881 },
+  { host: '82.221.103.244', port: 6881 },
+];
+
+/** The bootstrap nodes as IPv4 addresses (TURN needs addresses), via DNS over HTTPS. */
+export async function resolveBootstrap() {
+  const out = [];
+  await Promise.all(
+    BOOTSTRAP.map(async (b) => {
+      try {
+        const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${b.host}&type=A`, {
+          headers: { accept: 'application/dns-json' },
+          signal: AbortSignal.timeout(5000),
+        });
+        const body = await res.json();
+        for (const a of body.Answer ?? []) if (a.type === 1) out.push({ host: a.data, port: b.port });
+      } catch {}
+    }),
+  );
+  return out.length ? out : BOOTSTRAP_IPS;
+}
+
 const compactPeers = (values) => {
   const out = [];
   for (const v of values ?? []) {

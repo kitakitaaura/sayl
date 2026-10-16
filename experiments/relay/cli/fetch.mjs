@@ -15,6 +15,7 @@
  *   --debian             download the current Debian netinst ISO (official, legal)
  *   --peer <host:port>   also connect to this peer (repeatable)
  *   --no-extra-trackers  only use the torrent's own trackers
+ *   --no-dht             never use the DHT (by default it's the last resort, if the relay has TURN set up)
  *   --max-peers <n>      connections at once (default 40)
  *   --limit-mb <n>       stop after this many verified MB (default: whole torrent)
  *   --time-limit <s>     stop after this many seconds (default 600)
@@ -28,6 +29,7 @@ import { open, readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { Download } from '../public/client/download.js';
 import { parseMagnet, parseTorrentFile } from '../public/client/torrent.js';
+import { fetchTurnServers } from '../public/client/turn.js';
 
 const DEBIAN = 'https://cdimage.debian.org/debian-cd/current/amd64/';
 
@@ -41,6 +43,7 @@ const { values: o } = parseArgs({
     debian: { type: 'boolean', default: false },
     peer: { type: 'string', multiple: true, default: [] },
     'no-extra-trackers': { type: 'boolean', default: false },
+    'no-dht': { type: 'boolean', default: false },
     'max-peers': { type: 'string', default: '40' },
     'limit-mb': { type: 'string' },
     'time-limit': { type: 'string', default: '600' },
@@ -109,6 +112,7 @@ const download = new Download({
   maxPeers: Number(o['max-peers']),
   limitBytes: o['limit-mb'] ? Number(o['limit-mb']) * 1e6 : Infinity,
   extraTrackers: !o['no-extra-trackers'],
+  dht: o['no-dht'] ? null : { getTurn: () => fetchTurnServers(relay) },
   log: say,
 });
 

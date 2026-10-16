@@ -86,37 +86,51 @@ Then look at the Cloudflare dashboard → **Workers & Pages → sayl-relay → M
 | `peersTried` is high but `peersHandshaken` is low | Many peers refuse unencrypted connections or are unreachable. Encryption (MSE) can be added to the client. |
 | Every test fails to connect | Cloudflare blocks this kind of traffic. The idea is dead; back to a VPS. |
 
-## The DHT, through TURN
+## How peers are found
 
-Workers have no UDP, so the DHT (which finds peers for bare magnets and niche torrents) needs a detour. TURN, a service made for video calls, relays UDP. The client reaches a TURN server through the relay over TCP and uses it to talk to the DHT:
+In this order, stopping as soon as there are peers to talk to:
+
+1. **The torrent's own trackers**, and **about 25 public HTTP(S) trackers** for every torrent. The list comes from [ngosang/trackerslist](https://github.com/ngosang/trackerslist), fetched fresh each time, with a bundled copy as the fallback. udp:// trackers are also tried over HTTP on the same port.
+2. **PEX**: connected peers tell us about others.
+3. **The DHT, only as a last resort**: when, after 15 seconds, there's no peer connected, none being connected and none left to try. At most once every 10 minutes per download.
+
+### The DHT, through TURN
+
+Workers have no UDP and can't reach Cloudflare's own TURN servers (tested). So the DHT goes through the operator's TURN account at another provider, and users never see it:
 
 ```
-browser ── relay (TCP) ── TURN server ── UDP ──► DHT nodes
+browser ── relay (TCP) ── TURN server (operator's free account) ── UDP ──► DHT nodes
 ```
 
-What's been tested for real:
+- The relay hands the browser a short-lived login (`/turn-credentials`). The account's secret key stays in the relay.
+- A lookup is about 20 KB, so Metered's free 20 GB a month covers roughly a million lookups.
+- **It fails safe.** If there's no TURN account, the quota is used up, the login is refused or the server is down, the download carries on with trackers and PEX. A refused login switches the DHT off for an hour, so a dead account isn't retried on every download.
 
-- **Cloudflare's TURN relays DHT traffic.** Straight from a Mac, a lookup found 105 peers for Debian in 9 seconds.
-- **But Workers can't reach Cloudflare's own TURN servers**, on any port. So the relay needs a TURN provider outside Cloudflare. `TURN_HOSTS` in `wrangler.toml` lists the ones allowed (Metered and Xirsys by default).
+Set it up with Metered (free, no card):
 
-DHT lookups are small (about 15 KB each), so a free tier of a few hundred MB a month covers tens of thousands of lookups.
-
-To test with Metered (free, no card):
-
-1. Sign up at metered.ca, open the TURN server section, and copy a `turn:…?transport=tcp` or `turns:…:443` address, the username and the credential.
-2. If the address's host isn't covered by `TURN_HOSTS`, add it there. Then redeploy: `npx wrangler deploy`.
-3. Run, filling in the values (don't paste them anywhere):
+1. Sign up at metered.ca on the **Free (20 GB)** plan and create an app. Note the **app name** (the part before `.metered.live`) and, under the developer or API settings, the **secret key**.
+2. In this folder:
 
 ```sh
-# a. Does this TURN server reach the DHT? (from your computer, no relay)
-node cli/turn-check.mjs --direct --turn-url "turns:HOST:443?transport=tcp" --username USER --password CREDENTIAL
-# b. Through the relay, then a 20 MB download from DHT-only peers
-node cli/turn-check.mjs --relay $RELAY --token $TOKEN --turn-url "turns:HOST:443?transport=tcp" --username USER --password CREDENTIAL
+npx wrangler secret put METERED_APP
+npx wrangler secret put METERED_SECRET_KEY
+npx wrangler deploy
 ```
+
+If the free plan has no API access, use a fixed login from the Metered dashboard instead: `npx wrangler secret put` for `TURN_URLS` (e.g. `turns:standard.relay.metered.ca:443?transport=tcp`), `TURN_USERNAME` and `TURN_CREDENTIAL`.
+
+3. Check it, then try a bare magnet with no trackers at all:
+
+```sh
+node cli/turn-check.mjs --relay $RELAY --token $TOKEN
+node cli/fetch.mjs --relay $RELAY --token $TOKEN --via do --no-extra-trackers --magnet "magnet:?xt=urn:btih:7acf8fb590b2060dd9c3146ef770169d593433b0" --limit-mb 50
+```
+
+The second one has no tracker to ask, so peers can only come from the DHT. Its summary should say `"dht": "found … peers"`.
 
 ## Known limits
 
-- **The DHT isn't in the downloader yet.** It works on its own (`cli/turn-check.mjs`) and will be wired in once the TURN test passes. Until then a udp:// tracker is tried over HTTP on the same port, and opentrackr is always asked.
+- **The DHT needs a TURN account** (see above). Without one, torrents whose peers are only in the DHT won't start.
 - **No uploading yet.** The client only downloads. Seeding would only work while the tab is open, and only to peers we connect to.
 - **No encryption (MSE) yet.** Peers that require it will refuse us.
 - **One file out.** Multi-file torrents are saved as one joined file. Splitting them is a Sayl-frontend job.

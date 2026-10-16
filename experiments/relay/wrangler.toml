@@ -20,6 +20,10 @@ new_sqlite_classes = ["Session"]
 [vars]
 # "1" lets the relay reach private addresses. Only for local testing.
 ALLOW_PRIVATE_TARGETS = "0"
+# The DHT needs a TURN account (see worker/index.js, turnCredentials). For Metered:
+#   npx wrangler secret put METERED_APP          (the part before .metered.live)
+#   npx wrangler secret put METERED_SECRET_KEY
+# Without one, downloads still work; they just can't use the DHT.
 # TURN servers the relay may reach (gives the browser UDP, for the DHT). Comma-separated;
 # "*.example.com" allows its subdomains. Workers can't reach Cloudflare's own TURN servers,
 # so this needs a provider outside Cloudflare.
