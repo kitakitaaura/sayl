@@ -169,10 +169,14 @@ async function install(env, token) {
     throw new SetupError(`couldn't read your cloudflare account (${err.message}).`);
   });
   if (!Array.isArray(accounts) || !accounts.length) throw new SetupError('that sign-in gave sayl no cloudflare account to use. pick an account on the approval page.');
-  const account = accounts[0].id;
+  const account = await pickAccount(env, token, accounts.map((a) => a.id));
   const script = `/accounts/${account}/workers/scripts/${RELAY.name}`;
 
-  // Reuse the relay's token if it already has one, so other devices keep working.
+  // 1. A workers.dev subdomain for the account. A brand-new account has none, and Cloudflare
+  // won't take a Worker upload without one, so register one first (like `wrangler deploy` does).
+  const { subdomain, created: newSubdomain } = await ensureSubdomain(env, token, account);
+
+  // 2. Reuse the relay's token if it already has one, so other devices keep working.
   let accessToken = null;
   try {
     const settings = await cf(env, token, 'GET', `${script}/settings`);
@@ -187,7 +191,7 @@ async function install(env, token) {
   }
   accessToken ??= randomString(32);
 
-  // The Durable Object class needs a migration the first time only.
+  // 3. The Durable Object class needs a migration the first time only.
   let migrationTag = null;
   try {
     const service = await cf(env, token, 'GET', `/accounts/${account}/workers/services/${RELAY.name}`);
@@ -196,6 +200,7 @@ async function install(env, token) {
     if (!notFound(err)) throw err;
   }
 
+  // 4. Upload the relay.
   const metadata = {
     main_module: 'index.js',
     compatibility_date: RELAY.compatibilityDate,
@@ -218,30 +223,58 @@ async function install(env, token) {
     throw new SetupError(`cloudflare refused the relay upload (${err.message}).`);
   });
 
-  // The account's workers.dev subdomain: use it, or register one like wrangler does.
-  let subdomain = null;
-  let newSubdomain = false;
-  try {
-    subdomain = (await cf(env, token, 'GET', `/accounts/${account}/workers/subdomain`))?.subdomain ?? null;
-  } catch (err) {
-    if (!notFound(err)) throw err;
-  }
-  for (let attempt = 0; !subdomain && attempt < 3; attempt++) {
-    try {
-      subdomain = (await cf(env, token, 'PUT', `/accounts/${account}/workers/subdomain`, { json: { subdomain: randomHex(4) } }))?.subdomain ?? null;
-      newSubdomain = true;
-    } catch (err) {
-      if (!(err instanceof ApiError && err.code === 10031)) throw err; // 10031: name taken, try another
-    }
-  }
-  if (!subdomain) throw new SetupError("couldn't give your account a workers.dev address. set one in the cloudflare dashboard (workers → subdomain) and try again.");
-
+  // 5. Put it on its workers.dev address.
   await cf(env, token, 'POST', `${script}/subdomain`, {
     json: { enabled: true, previews_enabled: false },
     headers: { 'Cloudflare-Workers-Script-Api-Date': SCRIPT_API_DATE },
   });
 
   return { url: `https://${RELAY.name}.${subdomain}.workers.dev`, token: accessToken, newSubdomain };
+}
+
+/**
+ * When the sign-in covers several accounts: the one that already has the relay,
+ * else one with a workers.dev subdomain, else the first.
+ */
+async function pickAccount(env, token, ids) {
+  if (ids.length === 1) return ids[0];
+  const candidates = ids.slice(0, 10);
+  for (const id of candidates) {
+    try {
+      await cf(env, token, 'GET', `/accounts/${id}/workers/scripts/${RELAY.name}/settings`);
+      return id;
+    } catch {
+      // not here, or no access
+    }
+  }
+  for (const id of candidates) {
+    try {
+      if ((await cf(env, token, 'GET', `/accounts/${id}/workers/subdomain`))?.subdomain) return id;
+    } catch {
+      // none
+    }
+  }
+  return ids[0];
+}
+
+/** The account's workers.dev subdomain, registering a random one if it has none. */
+async function ensureSubdomain(env, token, account) {
+  try {
+    const existing = (await cf(env, token, 'GET', `/accounts/${account}/workers/subdomain`))?.subdomain;
+    if (existing) return { subdomain: existing, created: false };
+  } catch (err) {
+    if (!notFound(err)) throw new SetupError(`couldn't check your workers.dev address (${err.message}).`);
+  }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const made = (await cf(env, token, 'PUT', `/accounts/${account}/workers/subdomain`, { json: { subdomain: `sayl-${randomHex(4)}` } }))?.subdomain;
+      if (made) return { subdomain: made, created: true };
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 10031) continue; // that name is taken: try another
+      throw new SetupError(`couldn't give your account a workers.dev address (${err.message}).`);
+    }
+  }
+  throw new SetupError("couldn't find a free workers.dev address for your account. try again.");
 }
 
 // ── small helpers ─────────────────────────────────────────────────────────

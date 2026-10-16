@@ -136,6 +136,8 @@ const server = createServer(async (req, res) => {
     return fake.script ? ok(res, { default_environment: { script: { migration_tag: fake.script.migrationTag } } }) : fail(res, 404, 10090, 'service not found');
   }
   if (req.method === 'PUT' && path === S) {
+    // like Cloudflare: no Worker uploads until the account has a workers.dev subdomain
+    if (!fake.subdomain) return fail(res, 400, 10063, 'You need a workers.dev subdomain in order to proceed.');
     const request = new Request('http://x', { method: 'PUT', headers: { 'content-type': req.headers['content-type'] }, body });
     const form = await request.formData();
     const metadata = JSON.parse(form.get('metadata'));
@@ -280,7 +282,12 @@ try {
       first.metadata.keep_bindings?.includes('secret_text'),
     JSON.stringify(first.metadata.migrations),
   );
-  check('a workers.dev subdomain was registered (after one name was taken)', fake.subdomainPuts === 2 && /^[0-9a-f]{8}$/.test(fake.subdomain ?? ''), fake.subdomain);
+  const order = fake.apiCalls.filter((c) => c.includes('/workers/subdomain') || c === 'PUT /accounts/acc1/workers/scripts/sayl-relay');
+  check(
+    'a brand-new account gets a workers.dev subdomain before the upload (after one name was taken)',
+    fake.subdomainPuts === 2 && /^sayl-[0-9a-f]{8}$/.test(fake.subdomain ?? '') && order.indexOf('PUT /accounts/acc1/workers/subdomain') < order.indexOf('PUT /accounts/acc1/workers/scripts/sayl-relay'),
+    fake.subdomain,
+  );
   check('the relay was put on workers.dev', fake.enabled[0]?.body?.enabled === true && fake.enabled[0]?.apiDate === '2025-08-01');
   check(
     'the browser got the relay address and its token',
