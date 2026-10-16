@@ -1,0 +1,11 @@
+// Hosts the website on Cloudflare Workers as static assets.
+// Workers Builds settings: root directory "frontend", build command "npm run build", deploy command "npx wrangler deploy".
+{
+  "name": "sayl",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./build",
+    // unknown paths get build/404.html, which renders the error page
+    "not_found_handling": "404-page"
+  }
+}

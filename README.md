@@ -22,7 +22,17 @@ Finding peers, in order: the torrent's own trackers and about 25 public HTTP tra
 
 ## Put it online
 
-1. **The website.** Cloudflare Pages → *Connect to Git* → this repo. Root directory `frontend`, build command `npm run build`, output directory `build`. Variables:
+1. **The website**, on Cloudflare Workers. *Workers & Pages → Create → Import a repository* → this repo, with:
+
+   | Setting | Value |
+   |---|---|
+   | Root directory | `frontend` |
+   | Build command | `npm run build` |
+   | Deploy command | `npx wrangler deploy` |
+
+   The Worker is named in `frontend/wrangler.jsonc` (`sayl`); the project's name must match it. Then add a custom domain under the Worker's *Settings → Domains & Routes*. Cloudflare Pages works too: root directory `frontend`, build command `npm run build`, output directory `build`.
+
+   Build variables:
 
    | Variable | Example | Default |
    |---|---|---|
