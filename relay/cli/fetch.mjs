@@ -16,6 +16,7 @@
  *   --peer <host:port>   also connect to this peer (repeatable)
  *   --no-extra-trackers  only use the torrent's own trackers
  *   --no-dht             never use the DHT (by default it's the last resort, if the relay has TURN set up)
+ *   --turn-from <url>    when the relay has no TURN login, get one here (e.g. https://sayl.kitaaura.com/api/turn)
  *   --max-peers <n>      connections at once (default 40)
  *   --limit-mb <n>       stop after this many verified MB (default: whole torrent)
  *   --time-limit <s>     stop after this many seconds (default 600)
@@ -44,6 +45,7 @@ const { values: o } = parseArgs({
     peer: { type: 'string', multiple: true, default: [] },
     'no-extra-trackers': { type: 'boolean', default: false },
     'no-dht': { type: 'boolean', default: false },
+    'turn-from': { type: 'string' },
     'max-peers': { type: 'string', default: '40' },
     'limit-mb': { type: 'string' },
     'time-limit': { type: 'string', default: '600' },
@@ -112,7 +114,7 @@ const download = new Download({
   maxPeers: Number(o['max-peers']),
   limitBytes: o['limit-mb'] ? Number(o['limit-mb']) * 1e6 : Infinity,
   extraTrackers: !o['no-extra-trackers'],
-  dht: o['no-dht'] ? null : { getTurn: () => fetchTurnServers(relay) },
+  dht: o['no-dht'] ? null : { getTurn: () => fetchTurnServers(relay, { fallback: o['turn-from'] }) },
   log: say,
 });
 
