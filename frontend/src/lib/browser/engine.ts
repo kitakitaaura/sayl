@@ -799,6 +799,25 @@ export class BrowserEngine {
     return { expiresAt: Date.now() + 3600_000, files, zip: null };
   }
 
+  /**
+   * The finished files, as disk-backed Files with their path inside the torrent: a multi-file torrent's
+   * files sit in a folder named after it ("show/ep1.mkv"), a single file is just its name.
+   */
+  async finishedFiles(hash: string): Promise<{ name: string; files: { path: string; file: File }[] }> {
+    const item = this.need(hash);
+    if (!item.info || !item.rec.selected || !item.have) return { name: item.rec.name, files: [] };
+    await storage.close(hash); // flush what's written, so the files read whole
+    const per = fileProgress(item.info, item.have);
+    const top = item.info.files.length > 1 ? safePathParts(item.info.name).join('_') : null;
+    const files: { path: string; file: File }[] = [];
+    for (const i of item.rec.selected) {
+      if (per[i] < item.info.files[i].length) continue;
+      const parts = item.paths![i];
+      files.push({ path: [...(top ? [top] : []), ...parts].join('/'), file: await finishedFile(hash, parts) });
+    }
+    return { name: top ?? item.rec.name, files };
+  }
+
   // ── views and saving ──────────────────────────────────────────────────
 
   private need(hash: string): Item {

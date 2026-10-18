@@ -133,6 +133,11 @@ export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
 export const WEBRTC_TRACKERS: string[];
 export function webrtcSupported(): boolean;
+/** A .zip (stored, ZIP64 when needed) built from the files themselves, so big files stay on disk. */
+export function makeZip(
+  files: { path: string; blob: Blob }[],
+  options?: { onprogress?: (readBytes: number, totalBytes: number) => void; signal?: AbortSignal },
+): Promise<Blob>;
 export function loadPublicTrackers(options?: { timeoutMs?: number }): Promise<string[]>;
 
 export interface CreatedTorrent {

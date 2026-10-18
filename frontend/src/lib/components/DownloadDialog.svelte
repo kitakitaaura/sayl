@@ -2,6 +2,8 @@
   import Archive from '@lucide/svelte/icons/archive';
   import Download from '@lucide/svelte/icons/download';
   import File from '@lucide/svelte/icons/file';
+  import FolderDown from '@lucide/svelte/icons/folder-down';
+  import { canSaveToFolder, saveAsZip, saveToFolder } from '$lib/browser/save';
   import type { Links } from '$lib/api';
   import { BROWSER_ENGINE } from '$lib/config';
   import { fmtBytes } from '$lib/format';
@@ -27,21 +29,39 @@
 
   const name = (path: string) => path.split('/').pop() ?? path;
 
-  /** Browser engine: saves every file, one after another (the browser may ask to allow several downloads). */
-  async function saveAll() {
-    if (!links) return;
-    for (const f of links.files) {
-      const a = document.createElement('a');
-      a.href = f.url;
-      a.download = name(f.path);
-      a.click();
-      await new Promise((r) => setTimeout(r, 400));
+  // Browser engine: the whole torrent at once, into a folder (Chrome, Edge) or as one .zip.
+  const folderOk = canSaveToFolder();
+  let saving = $state<{ what: 'folder' | 'zip'; progress: number } | null>(null);
+  let controller: AbortController | null = null;
+
+  async function saveAll(what: 'folder' | 'zip') {
+    if (saving) return;
+    controller = new AbortController();
+    saving = { what, progress: 0 };
+    try {
+      const { name: top, files } = await app.finishedFiles(hash);
+      const progress = (p: number) => saving && (saving.progress = p);
+      if (what === 'folder') {
+        if (await saveToFolder(files, progress, controller.signal)) toasts.push(`saved ${files.length} file${files.length === 1 ? '' : 's'}`, 'ok');
+      } else {
+        await saveAsZip(top, files, progress, controller.signal);
+      }
+      app.downloaded(hash);
+    } catch (err) {
+      if (!controller?.signal.aborted) toasts.push(errorMessage(err), 'err');
+    } finally {
+      saving = null;
+      controller = null;
     }
-    app.downloaded(hash);
+  }
+
+  function close() {
+    controller?.abort();
+    onclose();
   }
 </script>
 
-<Dialog title="download" subtitle={torrent?.name ?? ''} {onclose}>
+<Dialog title="download" subtitle={torrent?.name ?? ''} onclose={close}>
   <div class="body">
     {#if !links}
       <p class="muted" role="status">getting your links…</p>
@@ -63,9 +83,16 @@
 
   {#snippet footer()}
     {#if BROWSER_ENGINE}
-      <span class="note">files save straight from your browser's storage.</span>
+      {#if saving}
+        <span class="note" role="status">{saving.what === 'zip' ? 'preparing the zip' : 'saving to the folder'}… {Math.round(saving.progress * 100)}%</span>
+      {:else}
+        <span class="note">files save straight from your browser's storage.</span>
+      {/if}
       {#if links && links.files.length > 1}
-        <button type="button" class="btn primary" data-autofocus onclick={saveAll}><Archive size={16} aria-hidden="true" />save all</button>
+        {#if folderOk}
+          <button type="button" class="btn" disabled={!!saving} onclick={() => saveAll('folder')}><FolderDown size={16} aria-hidden="true" />save to a folder</button>
+        {/if}
+        <button type="button" class="btn primary" data-autofocus disabled={!!saving} onclick={() => saveAll('zip')}><Archive size={16} aria-hidden="true" />download .zip</button>
       {/if}
     {:else}
       <span class="note">the zip streams right away. links last 6 hours.</span>

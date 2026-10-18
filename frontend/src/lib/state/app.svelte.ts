@@ -316,6 +316,12 @@ class App {
   }
 
   /** Links to save the finished files. */
+  /** Browser engine: the finished files themselves, to save as a folder or a zip. */
+  async finishedFiles(hash: string): Promise<{ name: string; files: { path: string; file: File }[] }> {
+    if (!this.engine) return { name: '', files: [] };
+    return this.engine.finishedFiles(hash);
+  }
+
   async links(hash: string): Promise<Links> {
     return this.engine ? this.engine.links(hash) : api.links(hash);
   }

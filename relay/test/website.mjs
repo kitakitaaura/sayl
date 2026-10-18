@@ -229,6 +229,36 @@ try {
   await waitPill('pack', 'done', 60);
   check('a recheck finds every piece intact', (await card('pack').getByRole('progressbar').getAttribute('aria-valuenow')) === '100');
 
+  // 6b2. The whole torrent at once: as a .zip, and into a folder (the folder picker is swapped for a folder in OPFS).
+  await page.evaluate(() => {
+    window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('picked', { create: true });
+  });
+  await card('pack').getByLabel('download', { exact: true }).click();
+  const zipped = await save(() => page.getByRole('dialog').getByRole('button', { name: 'download .zip' }).click());
+  const zipPath = join(work, 'pack.zip');
+  writeFileSync(zipPath, zipped.bytes);
+  const inZip = JSON.parse(
+    execFileSync('python3', ['-I', '-c', 'import zipfile,sys,hashlib,json\nz=zipfile.ZipFile(sys.argv[1])\nassert z.testzip() is None\nprint(json.dumps({i.filename: hashlib.sha256(z.read(i)).hexdigest() for i in z.infolist()}))', zipPath]).toString(),
+  );
+  check(
+    'download .zip: one zip of the finished files, in the torrent\'s folder, intact',
+    zipped.name === 'pack.zip' && JSON.stringify(inZip) === JSON.stringify({ 'pack/a.bin': sha256(pack.blobs[0]), 'pack/c.txt': sha256(pack.blobs[2]) }),
+    JSON.stringify(Object.keys(inZip)),
+  );
+  await page.getByRole('dialog').getByRole('button', { name: 'save to a folder' }).click();
+  await page.getByText('saved 2 files').waitFor({ timeout: 30_000 });
+  const inFolder = await page.evaluate(async () => {
+    const dir = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('picked')).getDirectoryHandle('pack');
+    const out = {};
+    for (const name of ['a.bin', 'c.txt']) {
+      const bytes = await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer();
+      out[name] = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return out;
+  });
+  check('save to a folder: the files land in a folder named after the torrent, intact', inFolder['a.bin'] === sha256(pack.blobs[0]) && inFolder['c.txt'] === sha256(pack.blobs[2]));
+  await page.getByRole('dialog').getByLabel('close').click();
+
   // 6c. Single-file .torrent, with "select files" off: starts by itself.
   await page.getByRole('switch', { name: 'select files' }).click();
   await page.locator('input[type=file][accept]').setInputFiles(join(work, 'single.torrent'));

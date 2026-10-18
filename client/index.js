@@ -5,4 +5,5 @@ export { fetchTurnServers } from './turn.js';
 export { pieceSegments, piecesForFiles, fileProgress, safePathParts } from './files.js';
 export { BUNDLED_TRACKERS, WEBRTC_TRACKERS, loadPublicTrackers } from './public-trackers.js';
 export { webrtcSupported } from './webrtc.js';
+export { makeZip } from './zip.js';
 export { createTorrent, magnetLink, pickPieceLength, torrentFile } from './create.js';

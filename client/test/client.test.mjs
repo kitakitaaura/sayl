@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { decode, encode } from '../bencode.js';
 import { parseMagnet, parseTorrentFile } from '../torrent.js';
@@ -211,4 +212,42 @@ test('makes torrents that parse back and whose pieces check out', async () => {
   await assert.rejects(createTorrent({ name: 'x', files: [{ path: ['..'], blob: new Blob([a]) }] }), /unusable/);
   await assert.rejects(createTorrent({ name: 'x', files: [{ path: ['a'], blob: new Blob([a]) }, { path: ['a'], blob: new Blob([c]) }] }), /both called/);
   await assert.rejects(createTorrent({ name: ' ', files }), /name/);
+});
+
+test('zips made from files open in a standard unzipper, with and without ZIP64', async () => {
+  const { makeZip, crc32 } = await import('../zip.js');
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  assert.equal(crc32(new TextEncoder().encode('123456789')), 0xcbf43926);
+  const a = Uint8Array.from({ length: 300_000 }, (_, i) => (i * 7) & 255);
+  const b = new TextEncoder().encode('hello, zip');
+  const files = [
+    { path: 'pack/a.bin', blob: new Blob([a]) },
+    { path: 'pack/sub/b é.txt', blob: new Blob([b]) },
+    { path: 'pack/empty.txt', blob: new Blob([]) },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), 'sayl-zip-'));
+  try {
+    for (const forceZip64 of [false, true]) {
+      let progress = null;
+      const zip = await makeZip(files, { forceZip64, onprogress: (r, t) => (progress = [r, t]) });
+      assert.deepEqual(progress, [300_010, 300_010]);
+      const file = join(dir, `t${forceZip64}.zip`);
+      writeFileSync(file, new Uint8Array(await zip.arrayBuffer()));
+      // python's zipfile checks every CRC and reads ZIP64 records
+      const out = execFileSync('python3', ['-I', '-c', `
+import zipfile, sys, hashlib, json
+z = zipfile.ZipFile(sys.argv[1])
+assert z.testzip() is None
+print(json.dumps({i.filename: hashlib.sha256(z.read(i)).hexdigest() for i in z.infolist()}))
+`, file]).toString();
+      const got = JSON.parse(out);
+      const sha = (u8) => createHash('sha256').update(u8).digest('hex');
+      assert.deepEqual(got, { 'pack/a.bin': sha(a), 'pack/sub/b é.txt': sha(b), 'pack/empty.txt': sha(new Uint8Array(0)) }, `zip64 ${forceZip64}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
