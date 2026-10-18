@@ -118,7 +118,7 @@
       {:else if t.state === 'selecting'}
         <span>{t.fileCount ?? 0} file{t.fileCount === 1 ? '' : 's'} · choose what to download</span>
       {:else if t.state === 'paused'}
-        <span>{finished ? 'seeding paused' : `paused at ${(t.progress * 100).toFixed(1)}%`}</span>
+        <span>{t.fromElsewhere ? 'added on another device · resume to download it here' : finished ? 'seeding paused' : `paused at ${(t.progress * 100).toFixed(1)}%`}</span>
       {:else if t.state === 'checking'}
         <span>checking pieces…</span>
       {:else if t.state === 'error'}

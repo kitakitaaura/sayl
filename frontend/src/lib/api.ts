@@ -29,6 +29,8 @@ export interface TorrentView {
   seedEndsAt: number | null;
   /** browser engine only: what went wrong, in words */
   error?: string | null;
+  /** browser engine only: added on another device (list sync) and not started here yet */
+  fromElsewhere?: boolean;
   /** browser engine only: a chosen file can be played in the browser while it downloads */
   playable?: boolean;
 }

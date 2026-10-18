@@ -57,7 +57,7 @@ const DHT_RETRY_MS = 10 * 60_000;
 const SEED_ANNOUNCE_S = 300; // a seeder asks the torrent's first trackers for new peers every 5 minutes
 const SEED_FAST_TRACKERS = 10; // as many as a magnet link carries
 const MAX_REQUEST = 128 * 1024; // the biggest block a peer may ask us for
-const MAX_QUEUED_REQUESTS = 256; // per peer
+const MAX_QUEUED_REQUESTS = 500; // per peer: what our extension handshake promises (reqq), so none are dropped
 const MAX_BUFFERED = 4 * 1024 * 1024; // per peer: past this, wait for the relay to catch up
 const ROTATE_MS = 30_000;
 /** Shared by every download on the page: when the DHT failed in a way that won't fix itself soon. */

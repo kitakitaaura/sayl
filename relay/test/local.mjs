@@ -144,7 +144,7 @@ try {
     : [];
 
   // 4. The relay, running locally.
-  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1', '--var', 'TURN_HOSTS:127.0.0.1', ...turnVars], {
+  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--persist-to', join(work, 'relay-state'), '--var', 'ALLOW_PRIVATE_TARGETS:1', '--var', 'TURN_HOSTS:127.0.0.1', ...turnVars], {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -173,6 +173,31 @@ try {
     'allows one announce per tunnel',
     (await rawTunnel(relayUrl, { host: '127.0.0.1', port: tracker.address().port }, [announce, announce])).error?.includes('one announce'),
   );
+
+  // 5b. The shared torrent list: per torrent, the newer change wins; removals stay as markers.
+  {
+    const post = async (entries) => (await fetch(`${relayUrl}/list`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ entries }) })).json();
+    const h = (n) => n.toString(16).padStart(40, '0');
+    const t = Date.now() - 60_000;
+    await post([{ hash: h(1), name: 'one', trackers: ['http://t/announce'], addedAt: t + 100, updatedAt: t + 100 }]);
+    await post([{ hash: h(1), name: 'older', trackers: [], addedAt: t + 100, updatedAt: t + 50 }, { hash: 'nothex', name: 'bad', updatedAt: t }]);
+    // more than the 128 keys storage takes per call
+    const many = Array.from({ length: 150 }, (_, i) => ({ hash: h(1000 + i), name: `n${i}`, trackers: [], addedAt: t + 10, updatedAt: t + 10 }));
+    await post(many);
+    const removed = await post([{ hash: h(1000), name: 'n0', trackers: [], addedAt: t + 10, updatedAt: t + 300, removed: true }]);
+    // a removal older than 30 days is forgotten
+    await post([{ hash: h(2), name: 'old', trackers: [], addedAt: 1, updatedAt: Date.now() - 31 * 24 * 3600_000, removed: true }]);
+    const got = await (await fetch(`${relayUrl}/list`)).json();
+    const one = got.entries.find((e) => e.hash === h(1));
+    check(
+      'the relay keeps a shared torrent list: newer wins, bad entries are dropped, removals are kept as markers',
+      one?.name === 'one' &&
+        got.entries.length === 151 &&
+        !got.entries.some((e) => e.name === 'bad' || e.hash === h(2)) &&
+        removed.entries.find((e) => e.hash === h(1000))?.removed === true,
+      `${got.entries.length} entries`,
+    );
+  }
 
   // 6. Downloads.
   for (const run of [

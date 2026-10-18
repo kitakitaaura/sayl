@@ -92,6 +92,11 @@ class App {
     window.addEventListener('pagehide', () => this.engine?.flush());
   }
 
+  /** List sync was turned on or off. */
+  syncChanged(): void {
+    if (settings.prefs.syncList) this.engine?.scheduleSync(0);
+  }
+
   /** Applies the speed limits from settings (MB/s) to every torrent. */
   applySpeedLimits(): void {
     this.engine?.setSpeedLimits(settings.prefs.downLimit * 1e6, settings.prefs.upLimit * 1e6);

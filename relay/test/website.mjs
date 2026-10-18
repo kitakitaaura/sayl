@@ -145,7 +145,7 @@ try {
   check('qbittorrent is seeding the test torrents', true);
 
   // 4. The relay.
-  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1'], {
+  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--persist-to', join(work, 'relay-state'), '--var', 'ALLOW_PRIVATE_TARGETS:1'], {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
     stdio: 'ignore',
@@ -474,6 +474,49 @@ try {
   const singleMagnet = await page.getByRole('dialog').locator('#share-magnet').inputValue();
   check('the share dialog gives a torrent\'s magnet', singleMagnet.includes(torrents.single.hash), singleMagnet.slice(0, 60));
   await page.getByRole('dialog').getByRole('button', { name: 'done' }).click();
+
+  // 6h2. The same list on another device: another browser profile on the same relay.
+  const other = await browser.newContext({ bypassCSP: true, acceptDownloads: true });
+  const pageB = await other.newPage();
+  pageB.on('pageerror', (e) => errors.push(`other device: ${e.message}`));
+  const cardB = (name) => pageB.locator(`article[aria-label="${name}"]`);
+  await pageB.goto(siteUrl);
+  await pageB.getByPlaceholder('https://sayl-relay.you.workers.dev').fill(relayUrl);
+  await pageB.getByLabel('save relay').click();
+  await pageB.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
+  await until(async () => (await cardB('pack').count()) > 0, 30, 'the list to reach the other device');
+  check(
+    'another device on the same relay gets the list, paused until resumed there',
+    (await cardB('pack').locator('.pill').textContent()) === 'paused' && (await cardB('pack').getByText('added on another device').count()) === 1,
+  );
+  const ghostHash = randomBytes(20).toString('hex');
+  await addMagnet(`magnet:?xt=urn:btih:${ghostHash}&dn=ghost`);
+  await card('ghost').waitFor({ timeout: 10_000 });
+  await until(async () => {
+    await pageB.reload();
+    // it syncs a second after loading
+    return cardB('ghost').waitFor({ timeout: 5000 }).then(() => true, () => false);
+  }, 40, 'a new torrent to reach the other device');
+  await card('ghost').getByLabel('remove').click();
+  await page.getByRole('dialog').getByRole('button', { name: 'delete files' }).click();
+  await until(async () => {
+    await pageB.reload();
+    return cardB('ghost').waitFor({ state: 'detached', timeout: 5000 }).then(() => true, () => false);
+  }, 40, 'a removal to reach the other device');
+  check('removed on one device, a torrent with nothing downloaded goes on the other too', true);
+  await cardB('single.bin').getByLabel('resume').click();
+  // like any magnet: the file list arrives, then you pick what to download
+  await cardB('single.bin').getByLabel('choose files').click({ timeout: 60_000 });
+  await pageB.getByRole('button', { name: 'download selected' }).click();
+  await cardB('single.bin').locator('.pill', { hasText: /^done$/ }).waitFor({ timeout: 60_000 });
+  await card('single.bin').getByLabel('remove').click();
+  await page.getByRole('dialog').getByRole('button', { name: 'delete files' }).click();
+  await new Promise((r) => setTimeout(r, 3500)); // the removal goes out
+  await pageB.reload();
+  await pageB.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
+  await new Promise((r) => setTimeout(r, 3000)); // and the other device syncs
+  check('but a torrent with files on the other device stays there', (await cardB('single.bin').locator('.pill').textContent()) === 'done');
+  await other.close();
 
   // 6i. Settings show the relay and storage.
   await page.goto(`${siteUrl}/settings`);

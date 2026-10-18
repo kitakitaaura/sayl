@@ -21,19 +21,21 @@
 import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import { turnLogins } from './turn-login.js';
+import { LIST_OBJECT, handleList } from './list.js';
 import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, isTurnHost, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
 
 /**
  * Bumped whenever the relay changes in a way people should update for. The website compares it with
  * the version it was built with and offers an update. Relays from before this field count as 1.
  */
-const RELAY_VERSION = 2;
+const RELAY_VERSION = 3;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/health') return Response.json({ status: 'ok', version: RELAY_VERSION }, { headers: { ...CORS, 'cache-control': 'no-store' } });
     if (url.pathname === '/turn-credentials') return turnCredentials(url, env);
+    if (url.pathname === '/list') return listRequest(request, url, env);
     if (url.pathname !== '/tunnel') return new Response('not found', { status: 404 });
 
     const refused = checkRequest(request, url, env);
@@ -47,10 +49,22 @@ export default {
   },
 };
 
-/** One Durable Object per browser download; it relays all of that download's tunnels. */
+/** The shared torrent list (list.js), kept by one Durable Object. Sent as text/plain, so no CORS preflight. */
+async function listRequest(request, url, env) {
+  const headers = { ...CORS, 'cache-control': 'no-store' };
+  if (env.ACCESS_TOKEN && url.searchParams.get('token') !== env.ACCESS_TOKEN) return Response.json({ error: 'bad token' }, { status: 403, headers });
+  const res = await env.SESSIONS.get(env.SESSIONS.idFromName(LIST_OBJECT)).fetch(request);
+  return new Response(res.body, { status: res.status, headers: { ...headers, 'content-type': 'application/json' } });
+}
+
+/**
+ * One Durable Object per browser download; it relays all of that download's tunnels.
+ * One more, named LIST_OBJECT, keeps the shared torrent list.
+ */
 export class Session extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === '/list') return handleList(request, this.ctx.storage);
     return openTunnel(url, this.env);
   }
 }

@@ -77,7 +77,8 @@ Peers see Cloudflare's addresses, not the person's. What passes through a relay 
 |---|---|
 | `GET /tunnel?host=…&port=…[&tls=1][&via=do&session=…][&token=…]` | WebSocket ⇄ TCP. `via=do` runs it in a Durable Object shared by one download (Sayl's default). |
 | `GET /turn-credentials[?token=…]` | A TURN login for the DHT, or an empty list and the reason (the code is in `worker/turn-login.js`, which the website uses too). |
-| `GET /health` | `{"status":"ok"}` |
+| `GET /list[?token=…]`, `POST /list[?token=…]` | The torrent list shared by the devices that use this relay ([`worker/list.js`](worker/list.js)): each sends its list, and per torrent the newer change wins. Kept in this account's Durable Object storage. |
+| `GET /health` | `{"status":"ok","version":3}`. The website compares the version with the relay it installs and offers an update when this one is older. |
 
 ## Measured on the real internet
 

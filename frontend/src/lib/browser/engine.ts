@@ -14,6 +14,7 @@
 import {
   Download,
   RateLimiter,
+  countRequest,
   createTorrent,
   equalBytes,
   fetchTurnServers,
@@ -73,6 +74,16 @@ export interface TorrentDetails {
   error: string | null;
 }
 
+/** A torrent in the relay's shared list (relay/worker/list.js). */
+interface SyncEntry {
+  hash: string;
+  name: string;
+  trackers: string[];
+  addedAt: number;
+  updatedAt: number;
+  removed?: boolean;
+}
+
 export interface AutoSelect {
   sequential: boolean;
   seed: boolean;
@@ -104,6 +115,31 @@ interface Rec {
   created?: boolean;
   /** start every file as soon as the metadata arrives (the "select files" chip was off); kept across reloads */
   autoSelect?: AutoSelect | null;
+  /** added on another device (list sync) and not started here yet */
+  fromElsewhere?: boolean;
+  /** when this torrent last changed, for list sync (defaults to addedAt) */
+  syncAt?: number;
+}
+
+/** Removals not yet sent to the relay's shared list: hash → when. */
+const REMOVED_KEY = 'sayl.sync-removed';
+const SYNC_EVERY_MS = 2 * 60_000;
+
+function loadRemoved(): Record<string, number> {
+  try {
+    const v = JSON.parse(localStorage.getItem(REMOVED_KEY) ?? '{}') as Record<string, number>;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveRemoved(v: Record<string, number>): void {
+  try {
+    localStorage.setItem(REMOVED_KEY, JSON.stringify(v));
+  } catch {
+    // storage blocked: removals just won't reach other devices
+  }
 }
 
 /** A file picked to share: where it goes in the torrent, and its contents. */
@@ -216,6 +252,133 @@ export class BrowserEngine {
     }
     this.emit();
     this.schedule();
+    // list sync: now, every two minutes, and whenever the page comes back into view
+    this.scheduleSync(1000);
+    setInterval(() => void this.sync(), SYNC_EVERY_MS);
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && this.scheduleSync(500));
+  }
+
+  // ── list sync: the same torrent list on every device that uses this relay ──
+
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
+  private syncing = false;
+  private syncAgain = false;
+
+  /** Syncs the list soon (after a change, so several changes go together). */
+  scheduleSync(delayMs = 2000): void {
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      void this.sync();
+    }, delayMs);
+  }
+
+  /**
+   * Sends this device's list (and its removals) to the relay and applies what comes back: torrents
+   * added elsewhere appear here paused; ones removed elsewhere go only if nothing of them is here.
+   */
+  async sync(): Promise<void> {
+    const relay = relayConfig.relay();
+    // not while a new relay is coming online: the page leaves its address alone until then
+    if (!relay || !settings.prefs.syncList || relayConfig.waiting) return;
+    if (relayConfig.version !== null && relayConfig.version < 3) return; // relays before version 3 have no list
+    if (this.syncing) {
+      this.syncAgain = true;
+      return;
+    }
+    this.syncing = true;
+    try {
+      const removed = loadRemoved();
+      const entries = [
+        ...[...this.items.values()].map(({ rec }) => ({ hash: rec.hash, name: rec.name, trackers: rec.trackers, addedAt: rec.addedAt, updatedAt: rec.syncAt ?? rec.addedAt })),
+        ...Object.entries(removed).map(([hash, at]) => ({ hash, name: hash, trackers: [], addedAt: at, updatedAt: at, removed: true })),
+      ];
+      const u = new URL('/list', relay.url);
+      if (relay.token) u.searchParams.set('token', relay.token);
+      countRequest({ durableObject: true });
+      // text/plain keeps it a simple request: no CORS preflight
+      const res = await fetch(u, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ entries }), signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) return;
+      const body = (await res.json()) as { entries?: SyncEntry[] };
+      // the removals sent are on the relay now (keep any made since)
+      const still = loadRemoved();
+      for (const [hash, at] of Object.entries(removed)) if (still[hash] === at) delete still[hash];
+      saveRemoved(still);
+      this.applyRemote(Array.isArray(body.entries) ? body.entries : []);
+    } catch {
+      // offline, or the relay is busy: next time
+    } finally {
+      this.syncing = false;
+      if (this.syncAgain) {
+        this.syncAgain = false;
+        this.scheduleSync(0);
+      }
+    }
+  }
+
+  private applyRemote(entries: SyncEntry[]): void {
+    let changed = false;
+    for (const e of entries) {
+      if (typeof e?.hash !== 'string' || !/^[0-9a-f]{40}$/.test(e.hash)) continue;
+      const local = this.items.get(e.hash);
+      if (e.removed) {
+        // removed on another device: drop it here only if nothing of it is here
+        if (local && (local.rec.syncAt ?? local.rec.addedAt) < e.updatedAt && this.nothingHere(local)) {
+          void this.drop(local);
+          changed = true;
+        }
+        continue;
+      }
+      if (local || loadRemoved()[e.hash]) continue;
+      const item = this.blank({
+        hash: e.hash,
+        name: typeof e.name === 'string' && e.name ? e.name : e.hash,
+        trackers: Array.isArray(e.trackers) ? e.trackers.filter((t) => typeof t === 'string') : [],
+        peers: [],
+        addedAt: e.addedAt || Date.now(),
+        hasInfo: false,
+        selected: null,
+        sequential: false,
+        have: null,
+        completedAt: null,
+        paused: true, // nothing big downloads by surprise: resume to get it here
+        error: null,
+        fromElsewhere: true,
+        syncAt: e.updatedAt,
+      });
+      this.items.set(e.hash, item);
+      changed = true;
+    }
+    if (changed) this.changed(true);
+  }
+
+  /** A torrent was added here: share it with the other devices (a removal of it from before no longer counts). */
+  private added(hash: string): void {
+    const removed = loadRemoved();
+    if (removed[hash]) {
+      delete removed[hash];
+      saveRemoved(removed);
+    }
+    if (settings.prefs.syncList) this.scheduleSync();
+  }
+
+    /** Nothing of this torrent is on this device: no verified piece, not finished, not made here. */
+  private nothingHere(item: Item): boolean {
+    return !item.rec.completedAt && !item.rec.created && !item.have?.some((v) => v);
+  }
+
+  /** Takes a torrent off this device (its stored files too). */
+  private async drop(item: Item): Promise<void> {
+    const hash = item.rec.hash;
+    this.items.delete(hash);
+    const d = item.dl;
+    item.dl = null;
+    item.starting = false;
+    d?.stop('removed');
+    for (const url of item.links) URL.revokeObjectURL(url);
+    this.changed(true);
+    await storage.remove(hash).catch(() => {});
+    this.schedule();
   }
 
   /** Saves progress right away (the page is closing). */
@@ -237,6 +400,7 @@ export class BrowserEngine {
 
   /** Called when the relay or connection settings change: everything running starts again with them. */
   relayChanged(): void {
+    this.scheduleSync(500);
     for (const item of this.items.values()) {
       const d = item.dl;
       item.dl = null; // so stopped() doesn't mistake this for the download ending
@@ -581,6 +745,7 @@ export class BrowserEngine {
       });
       item.rec.autoSelect = autoSelect;
       this.items.set(m.infoHash, item);
+      this.added(m.infoHash);
       this.changed(true);
       this.schedule();
       return this.view(item);
@@ -628,6 +793,7 @@ export class BrowserEngine {
       throw new EngineError(friendlyStorageError(err));
     }
     this.items.set(t.infoHash, item);
+    this.added(t.infoHash);
     this.changed(true);
     if (autoSelect) await this.select(t.infoHash, t.info.files.map((_, i) => i), autoSelect);
     return this.view(item);
@@ -702,6 +868,7 @@ export class BrowserEngine {
     item.rec.completedAt = Date.now();
     this.setSeed(item, true);
     this.items.set(t.infoHash, item);
+    this.added(t.infoHash);
     this.changed(true);
     this.schedule();
     return { view: this.view(item), magnet: t.magnet, torrent: t.torrent };
@@ -797,6 +964,7 @@ export class BrowserEngine {
     } else if (action === 'resume') {
       item.rec.paused = false;
       item.rec.error = null;
+      item.rec.fromElsewhere = false;
       this.schedule();
     } else if (action === 'recheck') {
       await this.recheck(item);
@@ -845,15 +1013,12 @@ export class BrowserEngine {
 
   async remove(hash: string): Promise<void> {
     const item = this.need(hash);
-    this.items.delete(hash);
-    const d = item.dl;
-    item.dl = null;
-    item.starting = false;
-    d?.stop('removed');
-    for (const url of item.links) URL.revokeObjectURL(url);
-    this.changed(true);
-    await storage.remove(hash).catch(() => {});
-    this.schedule();
+    // tell the other devices (they drop it only if nothing of it is there)
+    if (settings.prefs.syncList) {
+      saveRemoved({ ...loadRemoved(), [hash]: Date.now() });
+      this.scheduleSync();
+    }
+    await this.drop(item);
   }
 
   async removeAll(): Promise<number> {
@@ -987,6 +1152,7 @@ export class BrowserEngine {
       completedAt: rec.completedAt,
       seedEndsAt: null,
       error: rec.error,
+      fromElsewhere: !!rec.fromElsewhere,
       playable: !!info && !!rec.selected?.some((i) => mediaType(info.files.length === 1 ? info.name : info.files[i].path) !== null),
     };
   }

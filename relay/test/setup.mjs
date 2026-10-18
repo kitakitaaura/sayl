@@ -367,7 +367,7 @@ try {
   oldHealth = true;
   await page.goto(siteUrl);
   await page.getByText('your relay is out of date').waitFor({ timeout: 15_000 });
-  check('an older relay gets an "update your relay" notice', (await page.getByText('version 1; the latest is 2').count()) === 1);
+  check('an older relay gets an "update your relay" notice', (await page.getByText('version 1; the latest is 3').count()) === 1);
   oldHealth = false;
   await page.getByRole('button', { name: 'update with cloudflare' }).click();
   await until(async () => fake.uploads.length === 2, 30, 'the second upload');

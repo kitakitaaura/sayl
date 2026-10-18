@@ -146,6 +146,17 @@
         </div>
         <div class="row">
           <div class="lbl">
+            <b>same list on all your devices</b>
+            <span>
+              torrents you add show up on your other devices that use the same relay (set them up with the same cloudflare account), paused
+              until you resume them there. removing one removes it elsewhere only where nothing of it was downloaded. the list is kept on your
+              relay, in your own cloudflare account.
+            </span>
+          </div>
+          <Switch label="same list on all your devices" checked={p.syncList} onchange={(v) => (settings.set('syncList', v), app.syncChanged())} />
+        </div>
+        <div class="row">
+          <div class="lbl">
             <b>install {name}</b>
             <span>
               add it to your home screen or dock to open it like an app: in chrome or edge, the install icon in the address bar (on android, menu →

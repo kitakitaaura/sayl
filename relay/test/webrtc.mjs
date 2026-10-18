@@ -54,7 +54,7 @@ try {
   const trackerUrl = `ws://127.0.0.1:${TRACKER_PORT}`;
 
   // 2. A relay (the site wants one; nothing here is reachable through it).
-  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--var', 'ALLOW_PRIVATE_TARGETS:1'], {
+  const wrangler = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1', '--persist-to', join(work, 'relay-state'), '--var', 'ALLOW_PRIVATE_TARGETS:1'], {
     cwd: root,
     env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
     stdio: 'ignore',
@@ -122,7 +122,11 @@ try {
     await page.getByPlaceholder('https://sayl-relay.you.workers.dev').fill(relayUrl);
     await page.getByLabel('save relay').click();
     await page.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
+    // two people here share one relay (in real life each has their own): keep their lists apart
+    await page.goto(`${siteUrl}/settings`);
+    await page.getByRole('switch', { name: 'same list on all your devices' }).click();
     if (webrtc) await setWebrtc(page, true, '2.0');
+    else await page.goto(siteUrl);
   };
   // the sharing tab serves two downloaders here, so its ratio limit is 2
   const setWebrtc = async (page, on, ratio = null) => {
