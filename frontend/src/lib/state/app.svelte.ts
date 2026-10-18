@@ -76,6 +76,7 @@ class App {
     const reloaded = !installed && relayConfig.takeReloadMark();
     this.status = relayConfig.ready && !installed && !reloaded ? 'ready' : 'setup';
     if (installed || reloaded) void this.waitForNewRelay(!reloaded);
+    else if (relayConfig.ready) void relayConfig.checkVersion();
     window.addEventListener('beforeunload', (e) => {
       // closing the tab stops the downloads; they pick up again on the next visit
       if (this.engine?.busy) e.preventDefault();
@@ -92,6 +93,12 @@ class App {
     } else if (result === 'up') {
       toasts.push('your relay is ready', 'ok');
       this.relaySaved();
+      // an updated relay can answer from its old version for a moment: check again until it's current
+      for (let i = 0; i < 12; i++) {
+        await relayConfig.checkVersion();
+        if (!relayConfig.outdated) break;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
     } else {
       relayConfig.error = "your relay was installed but isn't answering yet. new workers.dev addresses can take a while; reload this page in a few minutes.";
     }
@@ -106,6 +113,7 @@ class App {
   relaySaved(): void {
     if (!this.engine) return;
     this.status = relayConfig.ready ? 'ready' : 'setup';
+    void relayConfig.checkVersion();
     this.engine.relayChanged();
   }
 

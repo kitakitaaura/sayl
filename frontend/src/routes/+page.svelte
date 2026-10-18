@@ -3,6 +3,7 @@
   import Gate from '$lib/components/Gate.svelte';
   import Omnibox from '$lib/components/Omnibox.svelte';
   import RelaySetup from '$lib/components/RelaySetup.svelte';
+  import RelayUpdate from '$lib/components/RelayUpdate.svelte';
   import TorrentCard from '$lib/components/TorrentCard.svelte';
   import Wordmark from '$lib/components/Wordmark.svelte';
   import { ABUSE_EMAIL, APP_NAME, BROWSER_ENGINE } from '$lib/config';
@@ -59,6 +60,7 @@
     {:else if app.status === 'banned'}
       <p class="status" role="alert">access from your network has been blocked. if you think this is a mistake, contact <span class="mono">{ABUSE_EMAIL}</span>.</p>
     {:else}
+    {#if BROWSER_ENGINE}<RelayUpdate />{/if}
     <Omnibox />
     <div class="chips" role="group" aria-label="options">
       {#each chips as c (c.key)}

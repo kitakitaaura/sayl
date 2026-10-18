@@ -236,6 +236,8 @@ try {
   cleanups.push(() => browser.close());
   const context = await browser.newContext();
   let relayProxyHits = 0;
+  // stands in for a relay from before versions: its /health has no version
+  let oldHealth = false;
   // Like the bug seen on the real Cloudflare: the page that waits for the new relay can't reach it,
   // though the relay is up and a reload reaches it fine.
   let loads = 0;
@@ -247,6 +249,9 @@ try {
     if (staleOnce && staleLoad === null) staleLoad = loads;
     if (staleOnce && loads === staleLoad) return route.abort();
     const u = new URL(route.request().url());
+    if (oldHealth && u.pathname === '/health') {
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' }, body: '{"status":"ok"}' });
+    }
     try {
       const r = await fetch(`http://127.0.0.1:${RELAY_PORT}${u.pathname}${u.search}`);
       await route.fulfill({ status: r.status, headers: { 'access-control-allow-origin': '*', 'content-type': r.headers.get('content-type') ?? 'text/plain' }, body: Buffer.from(await r.arrayBuffer()) });
@@ -293,7 +298,7 @@ try {
     relayProc = spawn(join(root, 'node_modules/.bin/wrangler'), ['dev', '--port', String(RELAY_PORT), '--ip', '127.0.0.1'], {
       cwd: dir,
       env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' },
-      stdio: 'ignore',
+      stdio: process.env.DEBUG ? 'inherit' : 'ignore',
     });
     cleanups.push(() => relayProc.kill('SIGTERM'));
   };
@@ -356,14 +361,21 @@ try {
   );
   check('the uploaded relay requires its token', (await fetch(`${local}/turn-credentials`)).status === 403 && (await fetch(`${local}/turn-credentials?token=${saved.token}`)).status === 200);
 
-  // Setting up again (another device, or a repair) keeps the same token and skips the migration.
-  await page.goto(`${siteUrl}/settings`);
-  await page.getByRole('button', { name: 'set up again with cloudflare' }).click();
+  check('a current relay gets no update notice', (await page.getByText('your relay is out of date').count()) === 0);
+
+  // An old relay gets a notice; updating it (setting up again) keeps the same token and skips the migration.
+  oldHealth = true;
+  await page.goto(siteUrl);
+  await page.getByText('your relay is out of date').waitFor({ timeout: 15_000 });
+  check('an older relay gets an "update your relay" notice', (await page.getByText('version 1; the latest is 2').count()) === 1);
+  oldHealth = false;
+  await page.getByRole('button', { name: 'update with cloudflare' }).click();
   await until(async () => fake.uploads.length === 2, 30, 'the second upload');
   await page.waitForURL((u) => !u.hash.includes('relay-') && u.pathname === '/', { timeout: 30_000 });
   await ready();
   const second = fake.uploads[1];
   const saved2 = await page.evaluate(() => JSON.parse(localStorage.getItem('sayl.relay') ?? '{}'));
+  check('after updating, the notice is gone', (await page.getByText('your relay is out of date').count()) === 0);
   check('setting up again reuses the token and skips the migration', binding(second, 'ACCESS_TOKEN')?.text === saved.token && !second.metadata.migrations && saved2.token === saved.token);
   check('setting up again reuses the workers.dev subdomain', fake.subdomainPuts === 2 && saved2.url === saved.url);
 

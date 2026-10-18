@@ -1,6 +1,7 @@
 /** The visitor's relay: the Cloudflare Worker that carries their BitTorrent connections. Kept in this browser. */
 import { browser } from '$app/environment';
 import type { Relay } from '$bt';
+import { RELAY_VERSION } from '$lib/config';
 
 const KEY = 'sayl.relay';
 /** set in sessionStorage across a reload made to check a new relay */
@@ -40,6 +41,30 @@ class RelayConfig {
   waiting = $state(false);
   /** what went wrong with automatic setup, to show on the setup screen */
   error = $state('');
+  /** the relay's version, from its /health (relays from before versions count as 1); null until checked */
+  version = $state<number | null>(null);
+
+  /** The relay is older than the one this site installs. */
+  get outdated(): boolean {
+    return this.version !== null && this.version < RELAY_VERSION;
+  }
+
+  /** Asks the relay which version it runs. Unreachable: leaves it unknown (no notice). */
+  async checkVersion(): Promise<void> {
+    const url = this.url;
+    if (!url) {
+      this.version = null;
+      return;
+    }
+    try {
+      const res = await fetch(`${url}/health`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+      const body = (await res.json()) as { status?: unknown; version?: unknown };
+      if (this.url !== url || !res.ok || body.status !== 'ok') return;
+      this.version = typeof body.version === 'number' && body.version > 0 ? body.version : 1;
+    } catch {
+      // offline or unreachable: say nothing about updates
+    }
+  }
 
   get ready(): boolean {
     return !!this.url;
@@ -168,6 +193,7 @@ class RelayConfig {
   }
 
   save(url: string, token: string): void {
+    if (url !== this.url) this.version = null;
     this.url = url;
     this.token = token;
     try {

@@ -7,6 +7,8 @@ export const API_URL = __API_URL__.replace(/\/+$/, '');
 export const SITE_URL = __SITE_URL__.replace(/\/+$/, '');
 export const ABUSE_EMAIL = __ABUSE_EMAIL__;
 export const TURNSTILE_SITE_KEY = __TURNSTILE_SITE_KEY__;
+/** The relay version this site installs (relay/worker/index.js); older relays are offered an update. */
+export const RELAY_VERSION = __RELAY_VERSION__;
 /** 'browser': torrents run in the visitor's browser through their relay. 'server': a self-hosted backend runs them. */
 export const ENGINE = __ENGINE__;
 export const BROWSER_ENGINE = ENGINE === 'browser';

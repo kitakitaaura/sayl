@@ -8,6 +8,10 @@ const env = (key: string) => process.env[key]?.trim() ?? '';
 // Where torrents run: 'browser' (in the visitor's browser, through a relay) or 'server' (a self-hosted backend).
 // Without ENGINE, a site built with API_URL talks to that server, and one without runs in the browser.
 const engine = env('ENGINE') || (env('API_URL') ? 'server' : 'browser');
+// The relay this site installs and expects; older relays get an "update your relay" notice.
+const relaySource = readFileSync(new URL('../relay/worker/index.js', import.meta.url), 'utf8');
+const relayVersion = Number(/^const RELAY_VERSION = (\d+);/m.exec(relaySource)?.[1]);
+if (!relayVersion) throw new Error('relay/worker/index.js has no RELAY_VERSION');
 if (engine !== 'server' && engine !== 'browser') throw new Error(`ENGINE must be "server" or "browser", not "${engine}"`);
 
 export default defineConfig({
@@ -22,5 +26,6 @@ export default defineConfig({
     __SITE_URL__: JSON.stringify(env('SITE_URL') || 'https://sayl.kitaaura.com'),
     __ABUSE_EMAIL__: JSON.stringify(env('ABUSE_EMAIL') || brand.abuseEmail),
     __TURNSTILE_SITE_KEY__: JSON.stringify(env('TURNSTILE_SITE_KEY')),
+    __RELAY_VERSION__: JSON.stringify(relayVersion),
   },
 });

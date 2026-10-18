@@ -6,6 +6,7 @@ declare global {
   const __SITE_URL__: string;
   const __ABUSE_EMAIL__: string;
   const __TURNSTILE_SITE_KEY__: string;
+  const __RELAY_VERSION__: number;
   const __ENGINE__: 'server' | 'browser';
 
   namespace App {}

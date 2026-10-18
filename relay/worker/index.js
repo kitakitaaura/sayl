@@ -23,10 +23,16 @@ import { DurableObject } from 'cloudflare:workers';
 import { turnLogins } from './turn-login.js';
 import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, isTurnHost, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
 
+/**
+ * Bumped whenever the relay changes in a way people should update for. The website compares it with
+ * the version it was built with and offers an update. Relays from before this field count as 1.
+ */
+const RELAY_VERSION = 2;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/health') return Response.json({ status: 'ok' }, { headers: CORS });
+    if (url.pathname === '/health') return Response.json({ status: 'ok', version: RELAY_VERSION }, { headers: { ...CORS, 'cache-control': 'no-store' } });
     if (url.pathname === '/turn-credentials') return turnCredentials(url, env);
     if (url.pathname !== '/tunnel') return new Response('not found', { status: 404 });
 
