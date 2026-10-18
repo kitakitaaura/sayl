@@ -6,6 +6,7 @@
   import ListChecks from '@lucide/svelte/icons/list-checks';
   import Pause from '@lucide/svelte/icons/pause';
   import Play from '@lucide/svelte/icons/play';
+  import MonitorPlay from '@lucide/svelte/icons/monitor-play';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import Share2 from '@lucide/svelte/icons/share-2';
   import Upload from '@lucide/svelte/icons/upload';
@@ -152,6 +153,9 @@
           >
             <Upload size={16} aria-hidden="true" />
           </button>
+        {/if}
+        {#if BROWSER_ENGINE && t.playable && t.state !== 'checking'}
+          <button type="button" class="icon-btn" title="play (while it downloads)" aria-label="play" onclick={() => ui.open({ kind: 'play', hash: t.hash })}><MonitorPlay size={16} aria-hidden="true" /></button>
         {/if}
         {#if BROWSER_ENGINE}
           <button type="button" class="icon-btn" title="share: magnet link and .torrent" aria-label="share" onclick={() => ui.open({ kind: 'share', hash: t.hash })}><Share2 size={16} aria-hidden="true" /></button>

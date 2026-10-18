@@ -112,6 +112,8 @@ export class Download {
   start(): Promise<Summary>;
   stop(reason?: string): void;
   select(wanted: Uint8Array): void;
+  /** Fetches these pieces (inclusive) before any others. */
+  prioritize(from: number, to: number): void;
   sequentialMode: boolean;
   progress(): Progress;
   summary(): Summary;

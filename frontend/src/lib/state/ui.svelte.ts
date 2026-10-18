@@ -19,6 +19,8 @@ export type DialogState =
   | { kind: 'create'; entries: PickedFile[] }
   /** browser engine: a torrent's magnet link and .torrent file */
   | { kind: 'share'; hash: string }
+  /** browser engine: play a file while it downloads */
+  | { kind: 'play'; hash: string }
   | { kind: 'confirm'; title: string; text: string; label: string; run: () => Promise<void> }
   | null;
 

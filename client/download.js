@@ -165,6 +165,12 @@ export class Download {
     this.sequential = !!on;
   }
 
+  /** Fetches these pieces (inclusive) before any others, e.g. where a video is playing. */
+  prioritize(from, to) {
+    this.priority = [from, to];
+    if (!this.stopped) for (const peer of this.peers) this.#fill(peer);
+  }
+
   #recount() {
     let n = 0;
     if (this.wanted) for (let i = 0; i < this.info.pieceCount; i++) if (this.wanted[i] && this.done[i] !== 1) n++;
@@ -782,7 +788,17 @@ export class Download {
       const block = a.blocks.indexOf(0);
       if (block !== -1) return [piece, block];
     }
-    // 2. A new wanted piece the peer has: the first one in sequential mode, else from a random place.
+    // 2. A wanted piece in the priority range (where something is playing), whatever is under way.
+    if (this.priority) {
+      const [from, to] = this.priority;
+      for (let piece = Math.max(0, from); piece <= Math.min(to, this.info.pieceCount - 1); piece++) {
+        if (!this.wanted[piece] || this.done[piece] || this.active.has(piece) || !peer.have[piece]) continue;
+        const blocks = Math.ceil(this.info.pieceSize(piece) / BLOCK);
+        this.active.set(piece, { buf: new Uint8Array(this.info.pieceSize(piece)), blocks: new Uint8Array(blocks), left: blocks, by: new Map() });
+        return [piece, 0];
+      }
+    }
+    // 3. A new wanted piece the peer has: the first one in sequential mode, else from a random place.
     const maxActive = Math.max(4, Math.min(Math.max(16, this.peers.size * 2), Math.floor((128 * 1024 * 1024) / this.info.pieceLength)));
     if (this.active.size < maxActive) {
       const n = this.info.pieceCount;
@@ -795,7 +811,7 @@ export class Download {
         return [piece, 0];
       }
     }
-    // 3. End game: everything is requested, so ask this peer for blocks others are slow on.
+    // 4. End game: everything is requested, so ask this peer for blocks others are slow on.
     if (this.active.size && this.#allRequested()) {
       for (const [piece, a] of this.active) {
         if (!peer.have[piece]) continue;

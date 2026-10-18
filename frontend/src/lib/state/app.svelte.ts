@@ -5,7 +5,7 @@
  * server-sent events. With the browser engine they run in this tab
  * (see $lib/browser/engine).
  */
-import { browser } from '$app/environment';
+import { browser, dev } from '$app/environment';
 import { api, ApiError, EVENTS_URL, type FileView, type Limits, type Links, type TorrentView } from '$lib/api';
 import { BrowserEngine, EngineError, type AutoSelect, type ShareFile } from '$lib/browser/engine';
 import { relayConfig } from '$lib/browser/relay.svelte';
@@ -71,6 +71,7 @@ class App {
       this.torrents = views;
       void this.runPending();
     });
+    this.startPlayback();
     await this.engine.load();
     const installed = relayConfig.takeFromLocation();
     const reloaded = !installed && relayConfig.takeReloadMark();
@@ -83,6 +84,25 @@ class App {
     });
     // progress is saved every few seconds; save the last bit too
     window.addEventListener('pagehide', () => this.engine?.flush());
+  }
+
+  /**
+   * Playing while downloading: the service worker answers the player's requests for /stream/… by asking
+   * this page for the bytes, which the engine reads from storage once those pieces are in.
+   */
+  private startPlayback(): void {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/service-worker.js', { type: dev ? 'module' : 'classic' }).catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
+      const d = e.data as { type?: string; hash: string; index: number; offset: number; length: number };
+      const port = e.ports[0];
+      if (d?.type !== 'sayl-read' || !port || !this.engine) return;
+      this.engine.readRange(d.hash, d.index, d.offset, d.length).then(
+        (r) => port.postMessage({ ok: true, total: r.total, bytes: r.bytes }, [r.bytes.buffer]),
+        (err) => port.postMessage({ ok: false, error: errorMessage(err) }),
+      );
+    });
+    navigator.serviceWorker.startMessages();
   }
 
   /** A relay was just installed for the visitor: wait until it answers, then get going. */

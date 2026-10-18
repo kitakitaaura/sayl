@@ -32,6 +32,7 @@ import {
   type Summary,
 } from '$bt';
 import type { FileView, Links, TorrentView } from '$lib/api';
+import { mediaType } from '$lib/media';
 import { settings } from '$lib/state/settings.svelte';
 import { relayConfig } from './relay.svelte';
 import { StorageError, finishedFile, storage } from './storage';
@@ -108,6 +109,8 @@ interface Item {
   peers: number;
   seeds: number;
   links: string[];
+  /** called on each verified piece: readers waiting for data (playback) */
+  waiters: Set<() => void>;
 }
 
 const pack = (have: Uint8Array): string => {
@@ -227,6 +230,7 @@ export class BrowserEngine {
       peers: 0,
       seeds: 0,
       links: [],
+      waiters: new Set(),
     };
   }
 
@@ -426,6 +430,52 @@ export class BrowserEngine {
     const chosen = new Set(item.rec.selected ?? []);
     for (const s of pieceSegments(item.info, piece)) if (chosen.has(s.file)) item.doneBytes += s.length;
     this.changed(false);
+    for (const wake of [...item.waiters]) wake();
+  }
+
+  /**
+   * Bytes of one file, for playing it while it downloads: waits (up to 90 s) for the pieces not in yet,
+   * asking the download to fetch them, and a little beyond, first.
+   */
+  async readRange(hash: string, index: number, offset: number, length: number): Promise<{ total: number; bytes: Uint8Array }> {
+    const item = this.need(hash);
+    const info = item.info;
+    if (!info || !item.rec.selected?.includes(index)) throw new EngineError("that file isn't being downloaded.");
+    const file = info.files[index];
+    const end = Math.min(file.length, offset + length);
+    if (offset >= end) return { total: file.length, bytes: new Uint8Array(0) };
+    const first = Math.floor((file.offset + offset) / info.pieceLength);
+    const last = Math.floor((file.offset + end - 1) / info.pieceLength);
+    // and about 16 MB more, so playing doesn't stall at every chunk
+    const ahead = Math.min(Math.floor((file.offset + file.length - 1) / info.pieceLength), last + Math.ceil((16 * 1024 * 1024) / info.pieceLength));
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      let missing = false;
+      for (let p = first; p <= last; p++) if (!item.have?.[p]) missing = true;
+      if (!missing) break;
+      if (Date.now() > deadline) throw new EngineError("this part hasn't downloaded yet. try again in a moment.");
+      item.dl?.prioritize(first, ahead);
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          item.waiters.delete(wake);
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(wake, 1000);
+        item.waiters.add(wake);
+      });
+    }
+    // read ahead's pieces get fetched first too, even once this range is in
+    item.dl?.prioritize(first, ahead);
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await storage.read(hash, index, offset, end - offset);
+    } catch {
+      await this.prepare(item); // a finished torrent that isn't running: open its files
+      bytes = await storage.read(hash, index, offset, end - offset);
+    }
+    if (!bytes) throw new EngineError("couldn't read that part of the file.");
+    return { total: file.length, bytes };
   }
 
   private async gotMetadata(item: Item, d: Download, info: Info): Promise<void> {
@@ -865,6 +915,7 @@ export class BrowserEngine {
       completedAt: rec.completedAt,
       seedEndsAt: null,
       error: rec.error,
+      playable: !!info && !!rec.selected?.some((i) => mediaType(info.files.length === 1 ? info.name : info.files[i].path) !== null),
     };
   }
 

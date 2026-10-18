@@ -51,7 +51,8 @@ const cleanup = () => {
 
 /** Writes the files under downloads/ and returns a .torrent for them. */
 function makeTorrent(downloads, name, files) {
-  const blobs = files.map((f) => randomBytes(f.size));
+  for (const f of files) if (f.bytes) f.size = f.bytes.length;
+  const blobs = files.map((f) => f.bytes ?? randomBytes(f.size));
   if (files.length === 1 && !files[0].path.includes('/')) {
     writeFileSync(join(downloads, name), blobs[0]);
   } else {
@@ -82,6 +83,13 @@ try {
   ]);
   const single = makeTorrent(downloads, 'single.bin', [{ path: 'single.bin', size: 6 * 1024 * 1024 + 99 }]);
   const big = makeTorrent(downloads, 'big.bin', [{ path: 'big.bin', size: 120 * 1024 * 1024 + 5 }]);
+  // a real video (VP8 in WebM, which Chromium plays) to watch while it downloads
+  const clipPath = join(work, 'clip.webm');
+  execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=duration=20:size=320x240:rate=25', '-c:v', 'libvpx', '-b:v', '600k', '-g', '25', clipPath]);
+  const movie = makeTorrent(downloads, 'movie', [
+    { path: 'notes.txt', size: 2000 },
+    { path: 'clip.webm', bytes: readFileSync(clipPath) },
+  ]);
 
   // 2. Fake tracker.
   const tracker = createServer((req, res) => res.end(Buffer.from(encode({ interval: 60, peers: new Uint8Array([127, 0, 0, 1, QBIT_PORT >> 8, QBIT_PORT & 255]) }))));
@@ -89,7 +97,7 @@ try {
   cleanups.push(() => tracker.close());
   const trackerUrl = `http://127.0.0.1:${tracker.address().port}/announce`;
   const torrents = {};
-  for (const [key, t] of Object.entries({ pack, single, big })) {
+  for (const [key, t] of Object.entries({ pack, single, big, movie })) {
     const bytes = encode({ announce: trackerUrl, info: t.info });
     const parsed = await parseTorrentFile(bytes);
     torrents[key] = { ...t, bytes, hash: parsed.infoHash, magnet: `magnet:?xt=urn:btih:${parsed.infoHash}&dn=${t.info.name}&tr=${encodeURIComponent(trackerUrl)}` };
@@ -120,6 +128,8 @@ try {
     cookie = r.headers.getSetCookie().map((c) => c.split(';')[0]).find((c) => /SID/.test(c));
     return (r.status === 204 || r.status === 200) && cookie;
   }, 60, 'qbittorrent');
+  // qBittorrent only keeps a few torrents active by default and queues the rest
+  await fetch(`${qbit}/api/v2/app/setPreferences`, { method: 'POST', body: new URLSearchParams({ json: JSON.stringify({ queueing_enabled: false }) }), headers: { cookie } });
   for (const t of Object.values(torrents)) {
     const form = new FormData();
     form.append('torrents', new Blob([t.bytes]), 'x.torrent');
@@ -130,7 +140,7 @@ try {
   }
   await until(async () => {
     const list = await (await fetch(`${qbit}/api/v2/torrents/info`, { headers: { cookie } })).json();
-    return list.length === 3 && list.every((t) => t.progress === 1 && /UP$/.test(t.state));
+    return list.length === Object.keys(torrents).length && list.every((t) => t.progress === 1 && /UP$/.test(t.state) && t.state !== 'queuedUP');
   }, 120, 'qbittorrent seeding');
   check('qbittorrent is seeding the test torrents', true);
 
@@ -265,6 +275,39 @@ try {
   await waitPill('single.bin', 'done');
   const savedS = await save(() => card('single.bin').getByLabel('download', { exact: true }).click());
   check('a dropped .torrent starts on its own and saves intact', savedS.name === 'single.bin' && sha256(savedS.bytes) === sha256(single.blobs[0]));
+
+  // 6c2. Playing a video while it downloads: the player streams it through the service worker.
+  await addMagnet(torrents.movie.magnet);
+  await card('movie').getByLabel('play').waitFor({ timeout: 60_000 });
+  const ranged = await page.evaluate(async (hash) => {
+    const res = await fetch(`/stream/${hash}/1/clip.webm`, { headers: { range: 'bytes=100-199' } });
+    return { status: res.status, range: res.headers.get('content-range'), type: res.headers.get('content-type'), bytes: Array.from(new Uint8Array(await res.arrayBuffer())) };
+  }, torrents.movie.hash);
+  check(
+    'the stream answers byte ranges of the file being downloaded',
+    ranged.status === 206 && ranged.range === `bytes 100-199/${movie.blobs[1].length}` && ranged.type === 'video/webm' && Buffer.from(ranged.bytes).equals(movie.blobs[1].subarray(100, 200)),
+    `${ranged.status} ${ranged.range}`,
+  );
+  await card('movie').getByLabel('play').click();
+  const video = page.getByRole('dialog').locator('video');
+  await video.waitFor({ timeout: 15_000 });
+  const played = await video.evaluate(async (v) => {
+    v.muted = true;
+    await v.play().catch(() => {});
+    const wait = (ok, ms) => new Promise((resolve) => {
+      const end = Date.now() + ms;
+      const tick = () => (ok() ? resolve(true) : Date.now() > end ? resolve(false) : setTimeout(tick, 100));
+      tick();
+    });
+    const playing = await wait(() => v.currentTime > 1, 20_000);
+    const duration = v.duration;
+    v.currentTime = duration - 2; // skip near the end: those bytes are fetched on demand
+    const seeked = await wait(() => !v.seeking && v.readyState >= 2 && v.currentTime >= duration - 2.5, 20_000);
+    return { playing, seeked, duration, error: v.error?.message ?? null };
+  });
+  await shot('player');
+  check('a video plays in the page while it downloads, and skipping ahead works', played.playing && played.seeked && Math.abs(played.duration - 20) < 1, JSON.stringify(played));
+  await page.getByRole('dialog').getByRole('button', { name: 'done' }).click();
 
   // 6d. Reload in the middle of a download: it picks up where it left off.
   await addMagnet(torrents.big.magnet);

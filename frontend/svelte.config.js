@@ -14,6 +14,8 @@ export default {
   preprocess: vitePreprocess(),
   kit: {
     alias: { $bt: '../client' },
+    // the browser engine registers it itself (for playing while downloading); the server version doesn't need it
+    serviceWorker: { register: false },
     // 404.html is served by Pages for unknown paths and renders the error page
     adapter: adapter({ pages: 'build', assets: 'build', fallback: '404.html', strict: true }),
     // SvelteKit hashes its own inline scripts into this policy (a <meta> tag on each page)
