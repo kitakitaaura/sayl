@@ -70,8 +70,11 @@ class App {
     this.engine = new BrowserEngine((views) => {
       this.torrents = views;
       void this.runPending();
+      void this.keepAwake();
     });
     this.startPlayback();
+    // a wake lock ends when the page is hidden; take it again when it's back
+    document.addEventListener('visibilitychange', () => void this.keepAwake());
     await this.engine.load();
     const installed = relayConfig.takeFromLocation();
     const reloaded = !installed && relayConfig.takeReloadMark();
@@ -84,6 +87,32 @@ class App {
     });
     // progress is saved every few seconds; save the last bit too
     window.addEventListener('pagehide', () => this.engine?.flush());
+  }
+
+  private wakeLock: WakeLockSentinel | null = null;
+  private wakeLockPending = false;
+
+  /**
+   * Keeps the screen on while something downloads, if that's turned on: phones pause a page whose screen
+   * is off or that's in the background, and its downloads with it.
+   */
+  async keepAwake(): Promise<void> {
+    const want = settings.prefs.keepAwake && !!this.engine?.busy && document.visibilityState === 'visible';
+    if (!want) {
+      const lock = this.wakeLock;
+      this.wakeLock = null;
+      await lock?.release().catch(() => {});
+      return;
+    }
+    if ((this.wakeLock && !this.wakeLock.released) || this.wakeLockPending || !('wakeLock' in navigator)) return;
+    this.wakeLockPending = true;
+    try {
+      this.wakeLock = await navigator.wakeLock.request('screen');
+    } catch {
+      // refused (battery saver, or not allowed here): downloads carry on as before
+    } finally {
+      this.wakeLockPending = false;
+    }
   }
 
   /**

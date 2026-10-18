@@ -15,6 +15,8 @@ export interface Prefs {
   selectFiles: boolean;
   /** browser engine: also connect straight to other browsers (WebRTC); they see this browser's IP */
   webrtc: boolean;
+  /** browser engine: keep the screen on while something downloads (phones pause pages in the background) */
+  keepAwake: boolean;
 }
 
 /** Read by the inline script in app.html too, so keep the key and shape stable. */
@@ -31,7 +33,11 @@ const DEFAULTS: Prefs = {
   showHashes: false,
   selectFiles: true,
   webrtc: false,
+  keepAwake: false,
 };
+
+/** Phones and tablets: on there by default, since a locked screen pauses the page and its downloads. */
+const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 function load(): Prefs {
   if (!browser) return { ...DEFAULTS };
@@ -48,9 +54,10 @@ function load(): Prefs {
       showHashes: bool('showHashes'),
       selectFiles: bool('selectFiles'),
       webrtc: bool('webrtc'),
+      keepAwake: typeof raw.keepAwake === 'boolean' ? raw.keepAwake : touchDevice(),
     };
   } catch {
-    return { ...DEFAULTS };
+    return { ...DEFAULTS, keepAwake: touchDevice() };
   }
 }
 

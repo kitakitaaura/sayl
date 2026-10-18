@@ -17,6 +17,10 @@
     settings.set('seedDefault', v);
     app.chips.seed = v;
   }
+  function setKeepAwake(v: boolean) {
+    settings.set('keepAwake', v);
+    void app.keepAwake();
+  }
   function setWebrtc(v: boolean) {
     settings.set('webrtc', v);
     app.connectionsChanged();
@@ -96,6 +100,29 @@
         <div class="row">
           <div class="lbl"><b>ratio limit</b><span>seeding stops once a torrent has uploaded this many times its size, or when you close this tab.</span></div>
           <Segmented label="ratio limit" value={p.ratio} options={RATIO_CHOICES.map((r) => ({ value: r as number, label: r.toFixed(1) }))} onchange={(v) => settings.set('ratio', v)} />
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="s-dv">
+        <h2 id="s-dv">this device</h2>
+        <div class="row">
+          <div class="lbl">
+            <b>keep the screen on while downloading</b>
+            <span>
+              phones pause a page when the screen turns off or you switch apps, and its downloads stop until you come back. this keeps the
+              screen on while something downloads. on by default on phones and tablets.
+            </span>
+          </div>
+          <Switch label="keep the screen on while downloading" checked={p.keepAwake} onchange={setKeepAwake} />
+        </div>
+        <div class="row">
+          <div class="lbl">
+            <b>install {name}</b>
+            <span>
+              add it to your home screen or dock to open it like an app: in chrome or edge, the install icon in the address bar (on android, menu →
+              add to home screen); on iphone and ipad, share → add to home screen.
+            </span>
+          </div>
         </div>
       </section>
 

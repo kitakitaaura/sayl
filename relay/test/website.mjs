@@ -183,6 +183,19 @@ try {
   await context.route(/raw\.githubusercontent\.com\/ngosang/, (route) =>
     route.fulfill({ contentType: 'text/plain', body: [trackerUrl, ...[1, 2, 3, 4].map((n) => `http://127.0.0.1:${n}/announce`)].join('\n\n') }),
   );
+  // the screen wake lock, recorded (a headless browser has no screen to keep on)
+  await context.addInitScript(() => {
+    window.__wake = { requests: 0, releases: 0 };
+    Object.defineProperty(navigator, 'wakeLock', {
+      value: {
+        request: async () => {
+          window.__wake.requests++;
+          const lock = { released: false, release: async () => ((lock.released = true), window.__wake.releases++) };
+          return lock;
+        },
+      },
+    });
+  });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -309,6 +322,35 @@ try {
   check('a video plays in the page while it downloads, and skipping ahead works', played.playing && played.seeked && Math.abs(played.duration - 20) < 1, JSON.stringify(played));
   await page.getByRole('dialog').getByRole('button', { name: 'done' }).click();
 
+  // 6c3. Installable: the manifest and its icons.
+  const manifest = await page.evaluate(async () => {
+    const href = document.querySelector('link[rel="manifest"]')?.getAttribute('href');
+    const m = await (await fetch(href)).json();
+    const icons = await Promise.all(m.icons.map(async (i) => (await fetch(i.src)).headers.get('content-type')));
+    return { name: m.name, display: m.display, start: m.start_url, icons, purposes: m.icons.map((i) => i.purpose ?? 'any') };
+  });
+  check(
+    'the site is installable: a manifest with app icons (one maskable)',
+    manifest.name === 'Sayl' && manifest.display === 'standalone' && manifest.start === '/' && manifest.icons.every((t) => t === 'image/png') && manifest.purposes.includes('maskable'),
+    JSON.stringify(manifest),
+  );
+
+  // 6c4. "Keep the screen on while downloading" (on by default on phones; turned on here).
+  await page.goto(`${siteUrl}/settings`);
+  const awake = page.getByRole('switch', { name: 'keep the screen on while downloading' });
+  check('on a computer, keeping the screen on is off by default', (await awake.getAttribute('aria-checked')) === 'false');
+  await awake.click();
+  const phone = await browser.newContext({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+  const phonePage = await phone.newPage();
+  await phonePage.goto(`${siteUrl}/settings`);
+  check(
+    'on a phone, keeping the screen on is on by default',
+    (await phonePage.getByRole('switch', { name: 'keep the screen on while downloading' }).getAttribute('aria-checked')) === 'true',
+  );
+  await phone.close();
+  await page.goto(siteUrl);
+  await page.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
+
   // 6d. Reload in the middle of a download: it picks up where it left off.
   await addMagnet(torrents.big.magnet);
   let atReload = 0;
@@ -331,6 +373,8 @@ try {
   const afterReload = Number(await card('big.bin').getByRole('progressbar').getAttribute('aria-valuenow', { timeout: 15_000 }));
   check('progress survives a reload', afterReload >= atReload - 1 && afterReload < 100, `${atReload}% before, ${afterReload}% after`);
   await waitPill('big.bin', 'done', 180);
+  const wake = await page.evaluate(() => window.__wake);
+  check('the screen is kept on while downloading, and let go once done', wake.requests >= 1 && wake.releases >= 1, JSON.stringify(wake));
   const savedB = await save(() => card('big.bin').getByLabel('download', { exact: true }).click());
   check('the resumed download saves intact', sha256(savedB.bytes) === sha256(big.blobs[0]), `${savedB.bytes.length} bytes`);
 
