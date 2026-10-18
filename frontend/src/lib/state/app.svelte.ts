@@ -7,7 +7,7 @@
  */
 import { browser, dev } from '$app/environment';
 import { api, ApiError, EVENTS_URL, type FileView, type Limits, type Links, type TorrentView } from '$lib/api';
-import { BrowserEngine, EngineError, type AutoSelect, type ShareFile } from '$lib/browser/engine';
+import { BrowserEngine, EngineError, type AutoSelect, type ShareFile, type TorrentDetails } from '$lib/browser/engine';
 import { relayConfig } from '$lib/browser/relay.svelte';
 import { storageSupported } from '$lib/browser/storage';
 import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
@@ -371,6 +371,15 @@ class App {
   }
 
   /** Links to save the finished files. */
+  /** Browser engine: everything about one torrent, for the details panel. */
+  details(hash: string): TorrentDetails | null {
+    try {
+      return this.engine?.details(hash) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Browser engine: the finished files themselves, to save as a folder or a zip. */
   async finishedFiles(hash: string): Promise<{ name: string; files: { path: string; file: File }[] }> {
     if (!this.engine) return { name: '', files: [] };

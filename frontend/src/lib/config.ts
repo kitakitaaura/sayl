@@ -9,6 +9,10 @@ export const ABUSE_EMAIL = __ABUSE_EMAIL__;
 export const TURNSTILE_SITE_KEY = __TURNSTILE_SITE_KEY__;
 /** The relay version this site installs (relay/worker/index.js); older relays are offered an update. */
 export const RELAY_VERSION = __RELAY_VERSION__;
+/** Which build of the site this is (a commit), for bug reports. */
+export const BUILD = __BUILD__;
+/** The source code, where bug reports go. */
+export const REPO_URL = __REPO_URL__.replace(/\/+$/, '');
 /** 'browser': torrents run in the visitor's browser through their relay. 'server': a self-hosted backend runs them. */
 export const ENGINE = __ENGINE__;
 export const BROWSER_ENGINE = ENGINE === 'browser';

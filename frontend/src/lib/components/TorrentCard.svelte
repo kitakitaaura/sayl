@@ -83,7 +83,11 @@
 <article class="card st-{t.state}" aria-label={t.name}>
   <div class="top">
     <div class="title">
-      <div class="name" title={t.name}>{t.name}</div>
+      {#if BROWSER_ENGINE}
+        <button type="button" class="name linkname" title="{t.name} · details" aria-label="details for {t.name}" onclick={() => ui.open({ kind: 'details', hash: t.hash })}>{t.name}</button>
+      {:else}
+        <div class="name" title={t.name}>{t.name}</div>
+      {/if}
       <div class="sub tabular">{sub}</div>
     </div>
     <span class="pill">{LABEL[t.state]}</span>
@@ -208,6 +212,21 @@
   .title {
     flex: 1;
     min-width: 0;
+  }
+  .linkname {
+    display: block;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .linkname:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--border-strong);
   }
   .name {
     font-size: 13.5px;

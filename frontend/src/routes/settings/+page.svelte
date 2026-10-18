@@ -5,6 +5,7 @@
   import Switch from '$lib/components/Switch.svelte';
   import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
   import { fmtBytes } from '$lib/format';
+  import { reportUrl } from '$lib/browser/report';
   import { app } from '$lib/state/app.svelte';
   import { RATIO_CHOICES, settings, type Theme } from '$lib/state/settings.svelte';
   import { ui } from '$lib/state/ui.svelte';
@@ -192,6 +193,19 @@
       {/if}
     </section>
 
+    {/if}
+
+    {#if BROWSER_ENGINE}
+      <section class="section" aria-labelledby="s-help">
+        <h2 id="s-help">help</h2>
+        <div class="row">
+          <div class="lbl">
+            <b>report a problem</b>
+            <span>opens a github issue filled in with your browser, relay version and settings (no torrent names). for one torrent, open its details (tap its name) and report from there.</span>
+          </div>
+          <a class="btn sm" href={reportUrl(null)} target="_blank" rel="noopener">report</a>
+        </div>
+      </section>
     {/if}
 
     <section class="section" aria-labelledby="s-pr">

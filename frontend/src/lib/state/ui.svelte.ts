@@ -21,6 +21,8 @@ export type DialogState =
   | { kind: 'share'; hash: string }
   /** browser engine: play a file while it downloads */
   | { kind: 'play'; hash: string }
+  /** browser engine: peers, trackers and the rest, live */
+  | { kind: 'details'; hash: string }
   | { kind: 'confirm'; title: string; text: string; label: string; run: () => Promise<void> }
   | null;
 

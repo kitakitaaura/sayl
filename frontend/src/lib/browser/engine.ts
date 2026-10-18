@@ -49,6 +49,30 @@ const STORAGE_MARGIN = 64 * 1024 * 1024;
 
 export class EngineError extends Error {}
 
+/** What the details panel shows about one torrent, live. */
+export interface TorrentDetails {
+  state: TorrentView['state'];
+  running: boolean;
+  size: number | null;
+  selectedSize: number | null;
+  files: number | null;
+  pieces: { have: number; total: number; size: number } | null;
+  speed: { down: number; up: number };
+  uploaded: number;
+  ratio: number;
+  seed: boolean;
+  sequential: boolean;
+  created: boolean;
+  /** peers now; the rest are totals since this run started */
+  peers: { connected: number; seeds: number; found: number; tried: number; handshaken: number; webrtc: number; bySource: Record<string, number> };
+  trackers: { url: string; status: string }[];
+  dht: string;
+  webrtc: boolean;
+  /** why connections failed, and how often, this run */
+  failures: Record<string, number>;
+  error: string | null;
+}
+
 export interface AutoSelect {
   sequential: boolean;
   seed: boolean;
@@ -857,6 +881,44 @@ export class BrowserEngine {
       files.push({ index: i, path: item.info.files.length === 1 ? item.info.name : f.path, size: f.length, url });
     }
     return { expiresAt: Date.now() + 3600_000, files, zip: null };
+  }
+
+  /** Everything about one torrent, for the details panel. */
+  details(hash: string): TorrentDetails {
+    const item = this.need(hash);
+    const view = this.view(item);
+    const d = item.dl;
+    const s = d?.summary();
+    const have = item.have ? item.have.reduce((n, v) => n + v, 0) : 0;
+    const trackerUrls = d ? [...d.trackers.keys()] : item.rec.trackers;
+    return {
+      state: view.state,
+      running: !!d,
+      size: view.totalSize,
+      selectedSize: view.selectedSize,
+      files: view.fileCount,
+      pieces: item.info ? { have, total: item.info.pieceCount, size: item.info.pieceLength } : null,
+      speed: { down: view.dlSpeed, up: view.upSpeed },
+      uploaded: view.uploaded,
+      ratio: view.ratio,
+      seed: view.seed,
+      sequential: item.rec.sequential,
+      created: !!item.rec.created,
+      peers: {
+        connected: item.peers,
+        seeds: item.seeds,
+        found: (s?.peersFound as number) ?? 0,
+        tried: (s?.peersTried as number) ?? 0,
+        handshaken: (s?.peersHandshaken as number) ?? 0,
+        webrtc: (s?.webrtcPeers as number) ?? 0,
+        bySource: (s?.peersFrom as Record<string, number>) ?? {},
+      },
+      trackers: trackerUrls.map((url) => ({ url, status: d ? ((s?.trackers as Record<string, string>)?.[url] ?? 'not asked yet') : 'not running' })),
+      dht: s ? s.dht : 'not running',
+      webrtc: settings.prefs.webrtc,
+      failures: (s?.connectFailures as Record<string, number>) ?? {},
+      error: item.rec.error,
+    };
   }
 
   /**

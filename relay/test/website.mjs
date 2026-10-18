@@ -358,6 +358,26 @@ try {
     atReload = Number(await card('big.bin').getByRole('progressbar').getAttribute('aria-valuenow'));
     return atReload >= 10;
   }, 120, 'the big download to get going');
+  // details, live, and "report a problem" without anything that says what's downloading
+  await card('big.bin').getByLabel('details for big.bin').click();
+  const details = page.getByRole('dialog');
+  await details.getByText('1 peers').waitFor({ timeout: 15_000 });
+  const detailText = (await details.textContent()) ?? '';
+  check('details show the running torrent: peers, pieces, trackers', /running/.test(detailText) && /1 connected/.test(detailText) && detailText.includes(trackerUrl), detailText.replace(/\s+/g, ' ').slice(0, 160));
+  const report = new URL((await details.getByRole('link', { name: 'report a problem' }).getAttribute('href')) ?? 'x:');
+  const reportBody = report.searchParams.get('body') ?? '';
+  check(
+    'report a problem: a github issue with the technical state, and no name, hash or tracker address',
+    report.href.startsWith('https://github.com/kitakitaaura/sayl/issues/new') &&
+      /browser: /.test(reportBody) &&
+      /relay: version/.test(reportBody) &&
+      /peers: \d+ connected/.test(reportBody) &&
+      !reportBody.includes('big.bin') &&
+      !reportBody.includes(torrents.big.hash) &&
+      !reportBody.includes('127.0.0.1'),
+    reportBody.split('\n').slice(6, 9).join(' / '),
+  );
+  await details.getByRole('button', { name: 'done' }).click();
   // pause holds still, resume carries on
   await card('big.bin').getByLabel('pause').click();
   await waitPill('big.bin', 'paused', 10);

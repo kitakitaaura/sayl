@@ -103,6 +103,8 @@ export interface DownloadOptions {
 export class Download {
   constructor(options: DownloadOptions);
   info: Info | null;
+  /** the trackers being asked (announce URL → schedule) */
+  readonly trackers: Map<string, unknown>;
   stopped: boolean;
   stopReason?: string;
   readonly have: Uint8Array | null;

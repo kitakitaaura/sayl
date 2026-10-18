@@ -21,6 +21,7 @@
   import FileDialog from '$lib/components/FileDialog.svelte';
   import Nav from '$lib/components/Nav.svelte';
   import RemoveDialog from '$lib/components/RemoveDialog.svelte';
+  import DetailsDialog from '$lib/components/DetailsDialog.svelte';
   import PlayerDialog from '$lib/components/PlayerDialog.svelte';
   import ShareDialog from '$lib/components/ShareDialog.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
@@ -70,6 +71,8 @@
     <RemoveDialog hash={ui.dialog.hash} onclose={close} />
   {:else if ui.dialog?.kind === 'create'}
     <CreateDialog entries={ui.dialog.entries} onclose={close} />
+  {:else if ui.dialog?.kind === 'details'}
+    <DetailsDialog hash={ui.dialog.hash} onclose={close} />
   {:else if ui.dialog?.kind === 'play'}
     <PlayerDialog hash={ui.dialog.hash} onclose={close} />
   {:else if ui.dialog?.kind === 'share'}
