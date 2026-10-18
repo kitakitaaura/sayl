@@ -481,6 +481,13 @@ try {
   await shot('settings');
   check('settings show the relay in use', (await page.getByText(relayUrl).count()) > 0);
   check('settings show browser storage', (await page.getByText('browser storage').count()) > 0);
+  const meter = (await page.getByRole('meter', { name: 'relay requests today' }).locator('..').textContent()) ?? '';
+  const used = Number(/([\d,]+) of 100,000/.exec(meter)?.[1]?.replace(/,/g, '') ?? 0);
+  check('settings estimate today\'s relay use against the free allowance', used > 10, meter.replace(/\s+/g, ' '));
+  await page.evaluate(() => localStorage.setItem('sayl.usage', JSON.stringify({ day: new Date().toISOString().slice(0, 10), workerRequests: 85_000, doRequests: 1000, doSeconds: 100 })));
+  await page.goto(siteUrl);
+  await page.getByText("of your relay's free daily allowance").waitFor({ timeout: 15_000 });
+  check('near the free allowance, the home page warns', (await page.getByText('about 85%').count()) === 1);
   check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 } catch (err) {
   check(`unexpected error: ${err.message.split('\n')[0]}`, false);

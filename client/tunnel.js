@@ -1,4 +1,5 @@
 /** A TCP connection made by the relay, carried over one WebSocket. */
+import { countDoMessages, countRequest } from './usage.js';
 
 /**
  * relay: { url: 'https://…' or 'http://…', via: 'worker' | 'do', session, token }
@@ -15,11 +16,13 @@ export function openTunnel(relay, { host, port, tls = false }, timeoutMs = 10_00
     u.searchParams.set('session', relay.session);
   }
   if (relay.token) u.searchParams.set('token', relay.token);
+  const durableObject = relay.via === 'do';
+  countRequest({ durableObject });
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(u);
     ws.binaryType = 'arraybuffer';
-    const tunnel = new Tunnel(ws);
+    const tunnel = new Tunnel(ws, durableObject);
     let settled = false;
     const fail = (message) => {
       if (settled) return;
@@ -70,8 +73,9 @@ const MAX_MESSAGE = 256 * 1024;
  * a download to a handful of messages per MB instead of one per block.
  */
 class Tunnel {
-  constructor(ws) {
+  constructor(ws, durableObject = false) {
     this.ws = ws;
+    this.durableObject = durableObject;
     this.queue = [];
     this.ondata = null;
     this.onclose = null;
@@ -95,6 +99,7 @@ class Tunnel {
     const sendBatch = () => {
       if (!batch.length) return;
       this.messagesOut++;
+      if (this.durableObject) countDoMessages(1);
       if (batch.length === 1) this.ws.send(batch[0]);
       else {
         const out = new Uint8Array(size);

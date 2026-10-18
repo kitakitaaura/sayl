@@ -1,6 +1,6 @@
 /** The visitor's relay: the Cloudflare Worker that carries their BitTorrent connections. Kept in this browser. */
 import { browser } from '$app/environment';
-import type { Relay } from '$bt';
+import { countRequest, type Relay } from '$bt';
 import { RELAY_VERSION } from '$lib/config';
 
 const KEY = 'sayl.relay';
@@ -57,6 +57,7 @@ class RelayConfig {
       return;
     }
     try {
+      countRequest();
       const res = await fetch(`${url}/health`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
       const body = (await res.json()) as { status?: unknown; version?: unknown };
       if (this.url !== url || !res.ok || body.status !== 'ok') return;
@@ -164,6 +165,7 @@ class RelayConfig {
   /** Whether this page reaches the relay itself. */
   private async answers(): Promise<boolean> {
     try {
+      countRequest();
       const res = await fetch(`${this.url}/health?t=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
       return res.ok;
     } catch {

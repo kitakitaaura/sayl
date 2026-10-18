@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import RelaySetup from '$lib/components/RelaySetup.svelte';
+  import UsageMeter from '$lib/components/UsageMeter.svelte';
   import Segmented from '$lib/components/Segmented.svelte';
   import Switch from '$lib/components/Switch.svelte';
   import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
@@ -84,6 +85,16 @@
             <b>your relay</b><span>the cloudflare worker that connects this browser to other peers. it runs on your own free cloudflare account.</span>
           </div>
           <RelaySetup compact />
+        </div>
+        <div class="row col">
+          <div class="lbl">
+            <b>relay use today</b>
+            <span>
+              from this browser, estimated, against cloudflare's free daily allowance (it resets at midnight utc). other devices on the same
+              relay add to it. downloads and seeding each keep a durable object busy, which counts as time.
+            </span>
+          </div>
+          <UsageMeter />
         </div>
       </section>
 
@@ -259,6 +270,10 @@
 </div>
 
 <style>
+  .row.col {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .num {
     flex: none;
     width: 110px;

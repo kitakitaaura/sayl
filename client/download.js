@@ -45,6 +45,7 @@ import { equalBytes, fromHex, hex, parseInfo, sha1 } from './torrent.js';
 import { TurnClient, TurnError, parseTurnUrl } from './turn.js';
 import { Dht, resolveBootstrap } from './dht.js';
 import { WebRtcTracker, webrtcSupported } from './webrtc.js';
+import { countDoSecond } from './usage.js';
 
 const BLOCK = 16 * 1024;
 const METADATA_PIECE = 16 * 1024;
@@ -402,6 +403,8 @@ export class Download {
   #tick() {
     if (this.stopped) return;
     const now = Date.now();
+    // its Durable Object is busy (and billed for time) while any connection to it is open
+    if (this.relay.via === 'do' && (this.peers.size > 0 || this.connecting > 0 || this.announcing > 0)) countDoSecond();
     this.#announceDue();
     this.#maybeDht(now);
     // Open more connections, a few at a time.

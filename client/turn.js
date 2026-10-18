@@ -11,6 +11,7 @@
  * `stream` is anything with send(bytes), ondata and onclose (a relay tunnel,
  * or a plain socket in Node).
  */
+import { countRequest } from './usage.js';
 import { md5 } from './md5.js';
 
 const MAGIC = 0x2112a442;
@@ -55,6 +56,7 @@ export function parseTurnUrl(url) {
 export async function fetchTurnServers(relay, { fallback } = {}) {
   const u = new URL('/turn-credentials', relay.url);
   if (relay.token) u.searchParams.set('token', relay.token);
+  countRequest();
   try {
     return await turnServersFrom(u);
   } catch (err) {

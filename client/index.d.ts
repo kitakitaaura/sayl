@@ -139,6 +139,10 @@ export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
 export const WEBRTC_TRACKERS: string[];
 export function webrtcSupported(): boolean;
+/** What this page has cost the relay so far (estimates): Worker requests, Durable Object requests and busy seconds. */
+export const relayUsage: { workerRequests: number; doRequests: number; doSeconds: number };
+/** Counts one request to the relay Worker (and its Durable Object). */
+export function countRequest(options?: { durableObject?: boolean }): void;
 /** A speed limit (bytes per second, 0 = none), shared by the downloads given it. */
 export class RateLimiter {
   constructor(bytesPerSecond?: number);

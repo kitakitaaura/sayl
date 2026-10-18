@@ -7,4 +7,5 @@ export { BUNDLED_TRACKERS, WEBRTC_TRACKERS, loadPublicTrackers } from './public-
 export { webrtcSupported } from './webrtc.js';
 export { makeZip } from './zip.js';
 export { RateLimiter } from './limiter.js';
+export { relayUsage, countRequest } from './usage.js';
 export { createTorrent, magnetLink, pickPieceLength, torrentFile } from './create.js';

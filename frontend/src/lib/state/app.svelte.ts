@@ -9,6 +9,7 @@ import { browser, dev } from '$app/environment';
 import { api, ApiError, EVENTS_URL, type FileView, type Limits, type Links, type TorrentView } from '$lib/api';
 import { BrowserEngine, EngineError, type AutoSelect, type ShareFile, type TorrentDetails } from '$lib/browser/engine';
 import { relayConfig } from '$lib/browser/relay.svelte';
+import { usage } from '$lib/browser/usage.svelte';
 import { storageSupported } from '$lib/browser/storage';
 import { APP_NAME, BROWSER_ENGINE } from '$lib/config';
 import { settings } from './settings.svelte';
@@ -74,6 +75,7 @@ class App {
     });
     this.startPlayback();
     this.applySpeedLimits();
+    usage.start();
     // a wake lock ends when the page is hidden; take it again when it's back
     document.addEventListener('visibilitychange', () => void this.keepAwake());
     await this.engine.load();
