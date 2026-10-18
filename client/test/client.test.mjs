@@ -251,3 +251,17 @@ print(json.dumps({i.filename: hashlib.sha256(z.read(i)).hexdigest() for i in z.i
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('speed limits let through about their rate', async () => {
+  const { RateLimiter } = await import('../limiter.js');
+  const free = new RateLimiter(0);
+  assert.ok(free.take(1e9), 'no limit');
+  const lim = new RateLimiter(256 * 1024); // 256 KiB/s, so a 256 KiB burst
+  let taken = 0;
+  while (lim.take(16 * 1024)) taken += 16 * 1024;
+  assert.equal(taken, 256 * 1024, 'one second\'s worth at once, no more');
+  const start = Date.now();
+  for (let i = 0; i < 10; i++) await lim.wait(16 * 1024); // 160 KiB more: about 0.63 s
+  const secs = (Date.now() - start) / 1000;
+  assert.ok(secs > 0.5 && secs < 1.1, `took ${secs}s`);
+});

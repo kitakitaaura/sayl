@@ -17,6 +17,11 @@
     settings.set('seedDefault', v);
     app.chips.seed = v;
   }
+  function setLimit(key: 'downLimit' | 'upLimit', value: string) {
+    const n = Number(value);
+    settings.set(key, Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : 0);
+    app.applySpeedLimits();
+  }
   function setKeepAwake(v: boolean) {
     settings.set('keepAwake', v);
     void app.keepAwake();
@@ -100,6 +105,18 @@
         <div class="row">
           <div class="lbl"><b>ratio limit</b><span>seeding stops once a torrent has uploaded this many times its size, or when you close this tab.</span></div>
           <Segmented label="ratio limit" value={p.ratio} options={RATIO_CHOICES.map((r) => ({ value: r as number, label: r.toFixed(1) }))} onchange={(v) => settings.set('ratio', v)} />
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="s-sp">
+        <h2 id="s-sp">speed</h2>
+        <div class="row">
+          <div class="lbl"><b>download limit</b><span>for all torrents together, in MB/s. empty for no limit.</span></div>
+          <input class="num" type="number" min="0" step="0.5" inputmode="decimal" placeholder="no limit" aria-label="download limit (MB/s)" value={p.downLimit || ''} onchange={(e) => setLimit('downLimit', e.currentTarget.value)} />
+        </div>
+        <div class="row">
+          <div class="lbl"><b>upload limit</b><span>for all torrents you share, together, in MB/s. empty for no limit.</span></div>
+          <input class="num" type="number" min="0" step="0.5" inputmode="decimal" placeholder="no limit" aria-label="upload limit (MB/s)" value={p.upLimit || ''} onchange={(e) => setLimit('upLimit', e.currentTarget.value)} />
         </div>
       </section>
 
@@ -228,6 +245,17 @@
 </div>
 
 <style>
+  .num {
+    flex: none;
+    width: 110px;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--fg);
+    text-align: right;
+  }
   .section {
     padding: 4px 16px;
     background: var(--surface);

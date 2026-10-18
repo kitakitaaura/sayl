@@ -17,6 +17,11 @@ export interface Prefs {
   webrtc: boolean;
   /** browser engine: keep the screen on while something downloads (phones pause pages in the background) */
   keepAwake: boolean;
+  /** browser engine: speed limits for all torrents together, in MB/s; 0 = none */
+  downLimit: number;
+  upLimit: number;
+  /** browser engine: share the torrent list with other devices that use the same relay */
+  syncList: boolean;
 }
 
 /** Read by the inline script in app.html too, so keep the key and shape stable. */
@@ -34,7 +39,13 @@ const DEFAULTS: Prefs = {
   selectFiles: true,
   webrtc: false,
   keepAwake: false,
+  downLimit: 0,
+  upLimit: 0,
+  syncList: true,
 };
+
+/** A speed limit in MB/s: a number from 0 (none) up. */
+const speed = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.min(v, 10_000) : 0);
 
 /** Phones and tablets: on there by default, since a locked screen pauses the page and its downloads. */
 const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -55,6 +66,9 @@ function load(): Prefs {
       selectFiles: bool('selectFiles'),
       webrtc: bool('webrtc'),
       keepAwake: typeof raw.keepAwake === 'boolean' ? raw.keepAwake : touchDevice(),
+      downLimit: speed(raw.downLimit),
+      upLimit: speed(raw.upLimit),
+      syncList: bool('syncList'),
     };
   } catch {
     return { ...DEFAULTS, keepAwake: touchDevice() };

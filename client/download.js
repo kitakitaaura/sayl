@@ -17,6 +17,8 @@
  * seed:       share too: answer peers' requests for the pieces we have, and once
  *             everything wanted is in, keep going (seeding) until stop() is called
  * read:       async (piece) => the piece's bytes from storage, needed with `seed`
+ * limits:     { download?, upload? } — RateLimiters (limiter.js), shared by every download for a
+ *             page-wide speed limit
  * webrtc:     { trackers: ['wss://…'], iceServers?, maxPeers? } — also connect straight to
  *             other browsers (WebTorrent's way), found through these trackers and the
  *             torrent's own ws(s):// ones. Browser only. Peers then see this browser's IP.
@@ -77,6 +79,7 @@ export class Download {
     read = null,
     uploadSlots = 4,
     webrtc = null,
+    limits = {},
     log = () => {},
   }) {
     this.relay = relay;
@@ -99,6 +102,8 @@ export class Download {
     this.lastRotateAt = 0;
     this.pieceCache = new Map(); // piece → Promise<Uint8Array | null>, oldest first
     this.webrtcOptions = webrtc && webrtcSupported() ? webrtc : null;
+    this.limits = limits ?? {};
+    this.throttleTimer = null;
     this.rtcTrackers = [];
     this.rtc = new Map(); // peer id (hex) → { rank, close }: browsers connected over WebRTC
     this.infoHash = fromHex(source.infoHash);
@@ -772,6 +777,13 @@ export class Download {
       if (!pick) break;
       const [piece, block] = pick;
       const a = this.active.get(piece);
+      const size = Math.min(BLOCK, this.info.pieceSize(piece) - block * BLOCK);
+      // the download speed limit: ask for no more than it allows; try again shortly
+      if (this.limits.download && !this.limits.download.take(size)) {
+        if (a.left === a.blocks.length && a.blocks.every((b) => b === 0)) this.active.delete(piece); // picked just now, unasked
+        this.#throttled();
+        break;
+      }
       a.blocks[block] = 1;
       if (!a.by.has(block)) a.by.set(block, new Set());
       a.by.get(block).add(peer);
@@ -779,6 +791,14 @@ export class Download {
       const begin = block * BLOCK;
       peer.wire.request(piece, begin, Math.min(BLOCK, this.info.pieceSize(piece) - begin));
     }
+  }
+
+  /** Throttled by the speed limit: fill every peer again in a moment. */
+  #throttled() {
+    this.throttleTimer ??= setTimeout(() => {
+      this.throttleTimer = null;
+      if (!this.stopped) for (const peer of this.peers) this.#fill(peer);
+    }, 100);
   }
 
   #pick(peer) {
@@ -966,7 +986,11 @@ export class Download {
         const now = peer.requests.filter((r) => r.index === index);
         peer.requests = peer.requests.filter((r) => r.index !== index);
         if (!data || peer.wire.closed || peer.wire.amChoking || this.stopped) continue;
+        const up = this.limits.upload;
         for (const r of now) {
+          // the upload speed limit: blocks within it leave together; past it, one at a time as it allows
+          if (up && !up.take(r.length)) await up.wait(r.length);
+          if (peer.wire.closed || peer.wire.amChoking || this.stopped) break;
           peer.wire.piece(r.index, r.begin, data.subarray(r.begin, r.begin + r.length));
           this.stats.uploadedBytes += r.length;
         }

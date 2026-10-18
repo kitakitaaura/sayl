@@ -23,6 +23,7 @@ import { decode, encode } from '../../client/bencode.js';
 import { Dht } from '../../client/dht.js';
 import { createTorrent } from '../../client/create.js';
 import { Download } from '../../client/download.js';
+import { RateLimiter } from '../../client/limiter.js';
 import { fromHex, parseTorrentFile } from '../../client/torrent.js';
 import { TurnClient, fetchTurnServers } from '../../client/turn.js';
 import { openTunnel } from '../../client/tunnel.js';
@@ -190,6 +191,17 @@ try {
   }
   check('the tracker was asked through the relay', announces >= 2, `${announces} announces`);
 
+  // 6a. A download speed limit holds.
+  {
+    const relay = { url: relayUrl, via: 'do', session: randomBytes(12).toString('base64url') };
+    const d = new Download({ relay, source: { ...torrent, peers: [] }, sink: {}, extraTrackers: false, limitBytes: 12e6, limits: { download: new RateLimiter(3e6) } });
+    const started = Date.now();
+    const s = await d.start();
+    const secs = (Date.now() - started) / 1000;
+    const rate = s.verifiedBytes / 1e6 / secs;
+    check('a 3 MB/s download limit holds', s.verifiedBytes >= 12e6 && rate < 3.6 && secs > 2.5, `${rate.toFixed(2)} MB/s over ${secs.toFixed(1)} s`);
+  }
+
   // 6b. Waiting for a choice of pieces, fetching only those, in order, then resuming for the rest.
   {
     const half = Math.floor(hashes.length / 2);
@@ -263,6 +275,19 @@ try {
       trackers: [trackerUrl],
     });
     const { pieceLength, pieceCount } = made.info;
+    // a 2 MB/s upload limit that notes when it lets bytes through
+    const upLimit = new (class extends RateLimiter {
+      bytes = 0;
+      take(n) {
+        const ok = super.take(n);
+        if (ok) {
+          this.first ??= Date.now();
+          this.last = Date.now();
+          this.bytes += n;
+        }
+        return ok;
+      }
+    })(2e6);
     let reads = 0;
     const seeder = new Download({
       relay: { url: relayUrl, via: 'do', session: randomBytes(12).toString('base64url') },
@@ -276,6 +301,7 @@ try {
         return new Uint8Array(all.subarray(p * pieceLength, p * pieceLength + made.info.pieceSize(p)));
       },
       extraTrackers: false,
+      limits: { upload: upLimit },
     });
     let seedingFromStart = false;
     seeder.oncomplete = () => (seedingFromStart = true);
@@ -306,6 +332,10 @@ try {
       qt?.state,
     );
     const p = seeder.progress();
+    // after the first second's worth (2 MB, allowed at once), the rest goes at the limit
+    const upSecs = (upLimit.last - upLimit.first) / 1000;
+    const upRate = (upLimit.bytes - 2e6) / 1e6 / Math.max(upSecs, 0.001);
+    check('a 2 MB/s upload limit holds', upRate < 2.3 && upSecs > 2.5, `${upRate.toFixed(2)} MB/s over ${upSecs.toFixed(1)} s`);
     check('the seeder counts what it uploaded, and read pieces back to do it', p.seeding && seedingFromStart && p.uploadedBytes >= all.length && reads >= pieceCount, `${p.uploadedBytes} bytes, ${reads} reads`);
     await until(async () => seeder.progress().peersConnected === 0, 30, 'the seeder to let go of a finished peer').catch(() => {});
     check('once qbittorrent is a seed too, the seeder lets go of it', seeder.progress().peersConnected === 0);

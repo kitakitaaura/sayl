@@ -73,6 +73,7 @@ class App {
       void this.keepAwake();
     });
     this.startPlayback();
+    this.applySpeedLimits();
     // a wake lock ends when the page is hidden; take it again when it's back
     document.addEventListener('visibilitychange', () => void this.keepAwake());
     await this.engine.load();
@@ -87,6 +88,11 @@ class App {
     });
     // progress is saved every few seconds; save the last bit too
     window.addEventListener('pagehide', () => this.engine?.flush());
+  }
+
+  /** Applies the speed limits from settings (MB/s) to every torrent. */
+  applySpeedLimits(): void {
+    this.engine?.setSpeedLimits(settings.prefs.downLimit * 1e6, settings.prefs.upLimit * 1e6);
   }
 
   private wakeLock: WakeLockSentinel | null = null;

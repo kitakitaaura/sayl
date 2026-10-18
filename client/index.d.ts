@@ -93,6 +93,8 @@ export interface DownloadOptions {
   read?: ((piece: number) => Promise<Uint8Array | null>) | null;
   /** peers unchoked at once while sharing (default 4) */
   uploadSlots?: number;
+  /** speed limits shared by every download that's given them */
+  limits?: { download?: RateLimiter; upload?: RateLimiter };
   /** also connect straight to other browsers over WebRTC, found through these WebTorrent trackers (browser only) */
   webrtc?: { trackers: string[]; iceServers?: RTCIceServer[]; maxPeers?: number } | null;
   log?: (line: string) => void;
@@ -135,6 +137,13 @@ export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
 export const WEBRTC_TRACKERS: string[];
 export function webrtcSupported(): boolean;
+/** A speed limit (bytes per second, 0 = none), shared by the downloads given it. */
+export class RateLimiter {
+  constructor(bytesPerSecond?: number);
+  setRate(bytesPerSecond: number): void;
+  take(bytes: number): boolean;
+  wait(bytes: number): Promise<void>;
+}
 /** A .zip (stored, ZIP64 when needed) built from the files themselves, so big files stay on disk. */
 export function makeZip(
   files: { path: string; blob: Blob }[],

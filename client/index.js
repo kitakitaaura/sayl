@@ -6,4 +6,5 @@ export { pieceSegments, piecesForFiles, fileProgress, safePathParts } from './fi
 export { BUNDLED_TRACKERS, WEBRTC_TRACKERS, loadPublicTrackers } from './public-trackers.js';
 export { webrtcSupported } from './webrtc.js';
 export { makeZip } from './zip.js';
+export { RateLimiter } from './limiter.js';
 export { createTorrent, magnetLink, pickPieceLength, torrentFile } from './create.js';

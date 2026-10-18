@@ -13,6 +13,7 @@
  */
 import {
   Download,
+  RateLimiter,
   createTorrent,
   equalBytes,
   fetchTurnServers,
@@ -157,6 +158,8 @@ function friendlyStorageError(err: unknown): string {
 
 export class BrowserEngine {
   private items = new Map<string, Item>();
+  /** speed limits for every torrent together */
+  private limits = { download: new RateLimiter(), upload: new RateLimiter() };
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private emitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -200,6 +203,12 @@ export class BrowserEngine {
   get busy(): boolean {
     for (const item of this.items.values()) if ((item.dl || item.starting) && item.rec.selected && !item.rec.completedAt) return true;
     return false;
+  }
+
+  /** Sets the speed limits for all torrents together, in bytes per second (0 = none). Running ones follow at once. */
+  setSpeedLimits(download: number, upload: number): void {
+    this.limits.download.setRate(download);
+    this.limits.upload.setRate(upload);
   }
 
   /** Called when the relay or connection settings change: everything running starts again with them. */
@@ -356,6 +365,7 @@ export class BrowserEngine {
       read: (piece) => this.readPiece(item, piece),
       // straight to other browsers, only if the visitor turned it on (peers then see their IP)
       webrtc: settings.prefs.webrtc ? { trackers: WEBRTC_TRACKERS } : null,
+      limits: this.limits,
     });
     item.dl = d;
     item.dlStartedAt = Date.now();
