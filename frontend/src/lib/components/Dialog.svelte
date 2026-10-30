@@ -89,6 +89,8 @@
     inset: 0;
     z-index: 50;
     display: grid;
+    /* one column no wider than the screen: long unbroken names (a file, a torrent) must not widen the sheet */
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
     padding: 16px;
     background: var(--backdrop);
@@ -96,6 +98,7 @@
   }
   .sheet {
     width: 100%;
+    min-width: 0;
     max-width: 460px;
     max-height: min(80dvh, 640px);
     display: flex;

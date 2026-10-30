@@ -347,6 +347,16 @@ try {
     'on a phone, keeping the screen on is on by default',
     (await phonePage.getByRole('switch', { name: 'keep the screen on while downloading' }).getAttribute('aria-checked')) === 'true',
   );
+  // a dialog with a very long file name still fits a phone screen
+  await phonePage.evaluate((url) => localStorage.setItem('sayl.relay', JSON.stringify({ url, token: '' })), relayUrl);
+  await phonePage.goto(siteUrl);
+  await phonePage.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
+  const longName = `${'a very long release name '.repeat(5).trim()} [1080p].mkv`;
+  writeFileSync(join(work, longName), 'hello');
+  await phonePage.getByLabel('files to share').setInputFiles(join(work, longName));
+  const sheet = await phonePage.locator('.sheet').boundingBox();
+  const button = await phonePage.getByRole('button', { name: 'make torrent' }).boundingBox();
+  check('on a phone, a dialog with a long file name fits the screen', sheet.width <= 390 && button.x + button.width <= 390, `sheet ${Math.round(sheet.width)} px wide`);
   await phone.close();
   await page.goto(siteUrl);
   await page.getByLabel('add a torrent').waitFor({ timeout: 15_000 });
