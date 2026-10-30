@@ -38,7 +38,7 @@
  * `uploadSlots` interested peers are unchoked at once, taking turns every 30 s.
  */
 import { MSG, EXT, Wire, parseMetadataMessage, parsePex } from './wire.js';
-import { announce, announceUrls } from './tracker.js';
+import { DEAD_FOR_MS, announce, announceUrls, deadTrackers } from './tracker.js';
 import { loadPublicTrackers } from './public-trackers.js';
 import { openTunnel } from './tunnel.js';
 import { equalBytes, fromHex, hex, parseInfo, sha1 } from './torrent.js';
@@ -254,6 +254,7 @@ export class Download {
       peersHandshaken: s.handshaken,
       connectFailures: s.failures,
       trackers: s.trackers,
+      trackersSkipped: s.trackersSkipped ?? 0,
       dht: s.dht,
       webrtcPeers: s.webrtcPeers,
       peersFrom: [...this.known.values()].reduce((o, k) => ((o[k.from] = (o[k.from] ?? 0) + 1), o), {}),
@@ -303,8 +304,15 @@ export class Download {
 
   /** `fast`: how many of these a seeder asks every 5 minutes (the rest at the tracker's own pace). */
   #addTrackers(urls, fast = 0) {
+    const now = Date.now();
     announceUrls(urls).forEach((url, i) => {
-      if (!this.trackers.has(url)) this.trackers.set(url, { nextAt: 0, failures: 0, busy: false, fast: i < fast });
+      if (this.trackers.has(url)) return;
+      // one that recently failed both ways is left out for a while (stats.trackersSkipped counts them)
+      if ((deadTrackers.get(url) ?? 0) > now) {
+        this.stats.trackersSkipped = (this.stats.trackersSkipped ?? 0) + 1;
+        return;
+      }
+      this.trackers.set(url, { nextAt: 0, failures: 0, busy: false, fast: i < fast });
     });
     this.#announceDue();
   }
@@ -335,6 +343,11 @@ export class Download {
           t.failures++;
           this.stats.trackers[url] = `failed: ${err.message}`;
           t.nextAt = t.failures >= 2 ? Infinity : Date.now() + 10 * 60_000;
+          // The relay reached out and the tracker wasn't there: skip it for a while, on every download.
+          // (Not when the relay itself was unreachable: that says nothing about the tracker.)
+          if (/connect failed|fetch failed|sent no HTTP response|empty answer|tracker timed out/.test(err.message) && !/relay unreachable/.test(err.message)) {
+            deadTrackers.set(url, Date.now() + DEAD_FOR_MS);
+          }
         })
         .finally(() => {
           t.busy = false;

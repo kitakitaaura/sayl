@@ -39,7 +39,7 @@ export function reportText(t: TorrentDetails | null): string {
         (t.pieces ? `, ${t.pieces.have}/${t.pieces.total} pieces of ${t.pieces.size / 1024} KiB` : ', no metadata yet'),
       `- speed: down ${speed(t.speed.down)}, up ${speed(t.speed.up)}; uploaded ${mb(t.uploaded)}${t.seed ? ', seeding on' : ''}${t.sequential ? ', sequential' : ''}${t.created ? ', made here' : ''}`,
       `- peers: ${t.peers.connected} connected (${t.peers.seeds} seeds); this run: ${t.peers.found} found, ${t.peers.tried} tried, ${t.peers.handshaken} handshakes, ${t.peers.webrtc} over webrtc; from ${JSON.stringify(t.peers.bySource)}`,
-      `- trackers: ${trackers.length}, ${ok} answered${failed.length ? `; failures: ${[...new Set(failed)].slice(0, 5).join(' | ')}` : ''}`,
+      `- trackers: ${trackers.length}, ${ok} answered, ${t.trackersSkipped} skipped (failed recently)${failed.length ? `; failures: ${[...new Set(failed)].slice(0, 5).join(' | ')}` : ''}`,
       `- dht: ${generic(t.dht)}`,
       `- connection failures: ${JSON.stringify(t.failures)}`,
     );

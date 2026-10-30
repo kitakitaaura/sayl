@@ -64,7 +64,7 @@ If the TURN server is missing, out of quota or refusing logins, downloads carry 
 The relay must not become a free proxy, so it only carries:
 
 - **BitTorrent connections.** The page must open with a BitTorrent handshake, and the remote must answer with one before anything else passes, in either direction. After that, pieces go both ways: downloads, and uploads when the person chose to seed.
-- **One tracker announce per tunnel.** A single `GET …announce…?…info_hash=…` request and nothing after it.
+- **One tracker announce per tunnel.** A single `GET …announce…?…info_hash=…` request and nothing after it. `/announce` makes the same request with `fetch()`, under the same rules.
 - **TURN,** and only to the hosts in `TURN_HOSTS`.
 
 It also refuses private and local addresses and mail ports. With `ACCESS_TOKEN` set, it refuses anyone without the token.
@@ -76,9 +76,10 @@ Peers see Cloudflare's addresses, not the person's. What passes through a relay 
 | Path | What it does |
 |---|---|
 | `GET /tunnel?host=…&port=…[&tls=1][&via=do&session=…][&token=…]` | WebSocket ⇄ TCP. `via=do` runs it in a Durable Object shared by one download (Sayl's default). |
+| `GET /announce?url=…[&token=…]` | A tracker announce made with `fetch()`, which (unlike a socket) reaches trackers behind Cloudflare. Only announce URLs to public hosts; the tracker's HTTP status comes back in `x-tracker-status` (0 when it couldn't be reached, and the page then tries a tunnel). |
 | `GET /turn-credentials[?token=…]` | A TURN login for the DHT, or an empty list and the reason (the code is in `worker/turn-login.js`, which the website uses too). |
 | `GET /list[?token=…]`, `POST /list[?token=…]` | The torrent list shared by the devices that use this relay ([`worker/list.js`](worker/list.js)): each sends its list, and per torrent the newer change wins. Kept in this account's Durable Object storage. |
-| `GET /health` | `{"status":"ok","version":3}`. The website compares the version with the relay it installs and offers an update when this one is older. |
+| `GET /health` | `{"status":"ok","version":4}`. The website compares the version with the relay it installs and offers an update when this one is older. |
 
 ## Measured on the real internet
 

@@ -22,13 +22,24 @@ import { connect } from 'cloudflare:sockets';
 import { DurableObject } from 'cloudflare:workers';
 import { turnLogins } from './turn-login.js';
 import { LIST_OBJECT, handleList } from './list.js';
-import { BT_HANDSHAKE_LENGTH, BT_PREFIX, MAX_ANNOUNCE_RESPONSE, isAnnounceRequest, isTurnAllocate, isTurnHost, parseTarget, startsWithBtHandshake, turnHosts } from './policy.js';
+import {
+  BT_HANDSHAKE_LENGTH,
+  BT_PREFIX,
+  MAX_ANNOUNCE_RESPONSE,
+  isAnnounceRequest,
+  isTurnAllocate,
+  isTurnHost,
+  parseAnnounceUrl,
+  parseTarget,
+  startsWithBtHandshake,
+  turnHosts,
+} from './policy.js';
 
 /**
  * Bumped whenever the relay changes in a way people should update for. The website compares it with
  * the version it was built with and offers an update. Relays from before this field count as 1.
  */
-const RELAY_VERSION = 3;
+const RELAY_VERSION = 4;
 
 export default {
   async fetch(request, env) {
@@ -36,6 +47,7 @@ export default {
     if (url.pathname === '/health') return Response.json({ status: 'ok', version: RELAY_VERSION }, { headers: { ...CORS, 'cache-control': 'no-store' } });
     if (url.pathname === '/turn-credentials') return turnCredentials(url, env);
     if (url.pathname === '/list') return listRequest(request, url, env);
+    if (url.pathname === '/announce') return announceRequest(url, env);
     if (url.pathname !== '/tunnel') return new Response('not found', { status: 404 });
 
     const refused = checkRequest(request, url, env);
@@ -48,6 +60,54 @@ export default {
     return openTunnel(url, env);
   },
 };
+
+/**
+ * A tracker announce made with fetch(). Sockets from a Worker can't reach sites behind Cloudflare (many
+ * public trackers are), but fetch() can. Answers with the tracker's body; its HTTP status is in
+ * x-tracker-status. A fetch that fails outright answers x-tracker-status 0 with { error }, and the page
+ * tries a tunnel instead (200 either way, so browsers don't log every dead tracker as an error).
+ */
+async function announceRequest(url, env) {
+  const headers = { ...CORS, 'access-control-expose-headers': 'x-tracker-status', 'cache-control': 'no-store' };
+  if (env.ACCESS_TOKEN && url.searchParams.get('token') !== env.ACCESS_TOKEN) return Response.json({ error: 'bad token' }, { status: 403, headers });
+  const target = parseAnnounceUrl(url.searchParams.get('url') ?? '', { allowPrivate: env.ALLOW_PRIVATE_TARGETS === '1' });
+  if (target.error) return Response.json({ error: target.error }, { status: 400, headers });
+  let res;
+  try {
+    res = await fetch(target.url, {
+      redirect: 'manual',
+      headers: { 'user-agent': 'Sayl-relay/0.1', 'accept-encoding': 'identity' },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    return Response.json({ error: `fetch failed: ${err.message}` }, { headers: { ...headers, 'x-tracker-status': '0' } });
+  }
+  // a tracker answer is small: read at most MAX_ANNOUNCE_RESPONSE
+  const parts = [];
+  let size = 0;
+  const reader = res.body?.getReader();
+  try {
+    for (;;) {
+      const { value, done } = reader ? await reader.read() : { done: true };
+      if (done) break;
+      size += value.length;
+      if (size > MAX_ANNOUNCE_RESPONSE) {
+        await reader.cancel();
+        return Response.json({ error: 'announce response too large' }, { headers: { ...headers, 'x-tracker-status': '0' } });
+      }
+      parts.push(value);
+    }
+  } catch (err) {
+    return Response.json({ error: `read failed: ${err.message}` }, { headers: { ...headers, 'x-tracker-status': '0' } });
+  }
+  const body = new Uint8Array(size);
+  let o = 0;
+  for (const p of parts) {
+    body.set(p, o);
+    o += p.length;
+  }
+  return new Response(body, { status: 200, headers: { ...headers, 'content-type': 'application/octet-stream', 'x-tracker-status': String(res.status) } });
+}
 
 /** The shared torrent list (list.js), kept by one Durable Object. Sent as text/plain, so no CORS preflight. */
 async function listRequest(request, url, env) {

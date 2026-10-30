@@ -9,6 +9,8 @@
  *      "announce" and whose query has info_hash, and nothing after it.
  *   3. TURN, only to the servers in TURN_HOSTS (Cloudflare's by default): it
  *      gives the browser UDP for the DHT.
+ * Plus /announce: the same tracker announce, made with fetch() instead of a
+ * socket (parseAnnounceUrl), since sockets can't reach sites behind Cloudflare.
  * Anything else closes the tunnel, so it can't be used as an open proxy.
  */
 
@@ -87,6 +89,26 @@ export function parseTarget(params, { allowPrivate = false } = {}) {
     if (kind === 'name' ? localName : !isPublicIp(ip, kind)) return { error: 'private address' };
   }
   return { host: ip, port, tls };
+}
+
+/**
+ * Checks a tracker announce URL for /announce: http(s), a path with "announce", an info_hash in the
+ * query, and the same host rules as tunnels. Returns { url } or { error }.
+ */
+export function parseAnnounceUrl(s, { allowPrivate = false } = {}) {
+  let u;
+  try {
+    u = new URL(s);
+  } catch {
+    return { error: 'bad url' };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'only http and https trackers' };
+  if (u.username || u.password) return { error: 'bad url' };
+  if (!/announce/i.test(u.pathname) || !/(^|&)info_hash=/.test(u.search.slice(1))) return { error: 'not a tracker announce' };
+  if (u.href.length > 4096) return { error: 'url too long' };
+  const target = parseTarget(new URLSearchParams({ host: u.hostname, port: u.port || (u.protocol === 'https:' ? '443' : '80') }), { allowPrivate });
+  if (target.error) return target;
+  return { url: u.href };
 }
 
 export function ipKind(host) {

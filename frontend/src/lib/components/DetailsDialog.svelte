@@ -44,7 +44,9 @@
           {#if d.error}<tr><th>error</th><td class="err">{d.error}</td></tr>{/if}
         </tbody>
       </table>
-      <h3>trackers ({d.trackers.length})</h3>
+      <h3>
+        trackers ({d.trackers.length}){d.trackersSkipped ? ` · ${d.trackersSkipped} left out: they failed recently and get another try in a few hours` : ''}
+      </h3>
       <ul class="trackers">
         {#each d.trackers as tr (tr.url)}
           <li><span class="url" title={tr.url}>{tr.url}</span><span class="st" class:bad={tr.status.startsWith('failed')}>{tr.status}</span></li>
@@ -100,9 +102,10 @@
   }
   .trackers li {
     display: flex;
-    gap: 10px;
+    flex-wrap: wrap;
+    column-gap: 10px;
     justify-content: space-between;
-    padding: 4px 0;
+    padding: 5px 0;
     border-top: 1px solid var(--border);
   }
   .url {
@@ -114,12 +117,15 @@
     font-size: 11.5px;
     color: var(--fg-2);
   }
+  .url {
+    flex: 1 1 14em;
+  }
+  /* the answer: beside the address when it fits, else on its own line, in full */
   .st {
-    flex: none;
-    max-width: 50%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    flex: 0 1 auto;
+    margin-left: auto;
+    text-align: right;
+    overflow-wrap: anywhere;
     color: var(--muted);
   }
   .st.bad {

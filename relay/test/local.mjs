@@ -71,8 +71,11 @@ try {
 
   // 2. A fake tracker that hands out the seeder's address.
   let announces = 0;
+  let fetchedAnnounces = 0;
   const tracker = createServer((req, res) => {
     announces++;
+    // the relay's fetch() speaks HTTP/1.1; a tunnel carries the client's HTTP/1.0 request
+    if (req.httpVersion === '1.1') fetchedAnnounces++;
     const peer = Buffer.from([127, 0, 0, 1, QBIT_PORT >> 8, QBIT_PORT & 255]);
     res.end(Buffer.from(encode({ interval: 60, peers: new Uint8Array(peer) })));
   });
@@ -214,7 +217,11 @@ try {
     const sha = createHash('sha256').update(out).digest('hex');
     check(`${run.label}: complete and identical`, s.complete && sha === payloadSha, `${(s.averageMBps).toFixed(1)} MB/s, ${s.hashFailures} hash failures, ${s.wastedBytes} wasted bytes, trackers ${JSON.stringify(s.trackers)}`);
   }
-  check('the tracker was asked through the relay', announces >= 2, `${announces} announces`);
+  check('the tracker was asked through the relay, with fetch (what reaches trackers behind cloudflare)', announces >= 2 && fetchedAnnounces >= 2, `${announces} announces, ${fetchedAnnounces} by fetch`);
+  {
+    const bad = async (u) => (await fetch(`${relayUrl}/announce?url=${encodeURIComponent(u)}`)).status;
+    check('the relay fetches only tracker announces', (await bad('http://127.0.0.1:1/admin?x=1')) === 400 && (await bad('ftp://x/announce?info_hash=1')) === 400);
+  }
 
   // 6a. A download speed limit holds.
   {

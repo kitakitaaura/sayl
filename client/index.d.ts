@@ -137,6 +137,9 @@ export function piecesForFiles(info: Info, fileIndexes: Iterable<number>): Uint8
 export function fileProgress(info: Info, have: Uint8Array): number[];
 export function safePathParts(path: string): string[];
 export const BUNDLED_TRACKERS: string[];
+/** Trackers that recently failed both ways (announce URL → skip until, ms), shared by every download. */
+export const deadTrackers: Map<string, number>;
+export const DEAD_FOR_MS: number;
 export const WEBRTC_TRACKERS: string[];
 export function webrtcSupported(): boolean;
 /** What this page has cost the relay so far (estimates): Worker requests, Durable Object requests and busy seconds. */

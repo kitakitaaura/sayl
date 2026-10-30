@@ -49,3 +49,18 @@ test('relay policy: turn', async () => {
   assert.ok(!isTurnHost('evilrelay.example.com', hosts));
   assert.ok(!isTurnHost('x.relay.example.com.evil.net', hosts));
 });
+
+test('/announce only fetches tracker announces on public hosts', async () => {
+  const { parseAnnounceUrl } = await import('../worker/policy.js');
+  assert.deepEqual(parseAnnounceUrl('https://tracker.example.com/announce?info_hash=%01%02&peer_id=x'), { url: 'https://tracker.example.com/announce?info_hash=%01%02&peer_id=x' });
+  assert.ok(parseAnnounceUrl('http://t.example:6969/a/announce.php?passkey=k&info_hash=%ff').url);
+  assert.ok(parseAnnounceUrl('https://example.com/admin?info_hash=1').error, 'not an announce');
+  assert.ok(parseAnnounceUrl('https://example.com/announce').error, 'no info_hash');
+  assert.ok(parseAnnounceUrl('ftp://example.com/announce?info_hash=1').error);
+  assert.ok(parseAnnounceUrl('http://127.0.0.1/announce?info_hash=1').error, 'private');
+  assert.ok(parseAnnounceUrl('http://192.168.1.2:8080/announce?info_hash=1').error, 'private');
+  assert.ok(parseAnnounceUrl('http://localhost/announce?info_hash=1').error, 'private');
+  assert.ok(parseAnnounceUrl('http://user:pw@example.com/announce?info_hash=1').error, 'credentials');
+  assert.ok(parseAnnounceUrl('http://mail.example.com:25/announce?info_hash=1').error, 'mail port');
+  assert.ok(parseAnnounceUrl('http://127.0.0.1:8080/announce?info_hash=1', { allowPrivate: true }).url, 'allowed in tests');
+});

@@ -15,6 +15,7 @@ import {
   Download,
   RateLimiter,
   countRequest,
+  deadTrackers,
   createTorrent,
   equalBytes,
   fetchTurnServers,
@@ -40,6 +41,8 @@ import { relayConfig } from './relay.svelte';
 import { StorageError, finishedFile, storage } from './storage';
 
 const RECORDS_KEY = 'sayl.torrents';
+/** Trackers that recently failed both ways, kept across visits: announce URL → skip until. */
+const DEAD_TRACKERS_KEY = 'sayl.dead-trackers';
 /** Downloads running at once; the rest wait their turn. */
 const MAX_RUNNING = 3;
 /** Finished torrents seeding at once, on top of the downloads. */
@@ -67,6 +70,8 @@ export interface TorrentDetails {
   /** peers now; the rest are totals since this run started */
   peers: { connected: number; seeds: number; found: number; tried: number; handshaken: number; webrtc: number; bySource: Record<string, number> };
   trackers: { url: string; status: string }[];
+  /** trackers left out because they recently failed both ways */
+  trackersSkipped: number;
   dht: string;
   webrtc: boolean;
   /** why connections failed, and how often, this run */
@@ -228,6 +233,12 @@ export class BrowserEngine {
   // ── lifecycle ─────────────────────────────────────────────────────────
 
   async load(): Promise<void> {
+    try {
+      const dead = JSON.parse(localStorage.getItem(DEAD_TRACKERS_KEY) ?? '{}') as Record<string, number>;
+      for (const [url, until] of Object.entries(dead)) if (typeof until === 'number' && until > Date.now()) deadTrackers.set(url, until);
+    } catch {
+      // start without it
+    }
     let recs: Rec[] = [];
     try {
       recs = JSON.parse(localStorage.getItem(RECORDS_KEY) ?? '[]') as Rec[];
@@ -1079,6 +1090,7 @@ export class BrowserEngine {
         bySource: (s?.peersFrom as Record<string, number>) ?? {},
       },
       trackers: trackerUrls.map((url) => ({ url, status: d ? ((s?.trackers as Record<string, string>)?.[url] ?? 'not asked yet') : 'not running' })),
+      trackersSkipped: (s?.trackersSkipped as number) ?? 0,
       dht: s ? s.dht : 'not running',
       webrtc: settings.prefs.webrtc,
       failures: (s?.connectFailures as Record<string, number>) ?? {},
@@ -1180,7 +1192,10 @@ export class BrowserEngine {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const recs = [...this.items.values()].map((i) => ({ ...i.rec, have: i.have && i.info ? pack(i.have) : null }));
+    const now = Date.now();
+    const dead = Object.fromEntries([...deadTrackers].filter(([, until]) => until > now));
     try {
+      localStorage.setItem(DEAD_TRACKERS_KEY, JSON.stringify(dead));
       localStorage.setItem(RECORDS_KEY, JSON.stringify(recs));
     } catch {
       // storage blocked or full: the list just won't survive a reload

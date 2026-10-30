@@ -343,10 +343,10 @@ try {
   const phone = await browser.newContext({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
   const phonePage = await phone.newPage();
   await phonePage.goto(`${siteUrl}/settings`);
-  check(
-    'on a phone, keeping the screen on is on by default',
-    (await phonePage.getByRole('switch', { name: 'keep the screen on while downloading' }).getAttribute('aria-checked')) === 'true',
-  );
+  // the page is prerendered with the defaults for no screen at all; it settles once its script runs
+  const phoneSwitch = phonePage.getByRole('switch', { name: 'keep the screen on while downloading' });
+  const phoneOn = await until(async () => (await phoneSwitch.getAttribute('aria-checked')) === 'true', 10, 'the phone default').then(() => true, () => false);
+  check('on a phone, keeping the screen on is on by default', phoneOn);
   // a dialog with a very long file name still fits a phone screen
   await phonePage.evaluate((url) => localStorage.setItem('sayl.relay', JSON.stringify({ url, token: '' })), relayUrl);
   await phonePage.goto(siteUrl);

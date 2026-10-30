@@ -265,3 +265,24 @@ test('speed limits let through about their rate', async () => {
   const secs = (Date.now() - start) / 1000;
   assert.ok(secs > 0.5 && secs < 1.1, `took ${secs}s`);
 });
+
+test('an older relay without /announce: tunnels from then on', async () => {
+  const { announce } = await import('../tracker.js');
+  const { createServer } = await import('node:http');
+  let announceHits = 0;
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/announce')) announceHits++;
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const relay = { url: `http://127.0.0.1:${server.address().port}` };
+  const opts = { infoHash: new Uint8Array(20), peerId: new Uint8Array(20), left: 1 };
+  try {
+    await assert.rejects(announce(relay, 'http://tracker.test/announce', opts), /by fetch: the relay has no \/announce/);
+    await assert.rejects(announce(relay, 'http://tracker.test/announce', opts), (e) => !/by fetch/.test(e.message));
+    assert.equal(announceHits, 1, 'asked once, then remembered');
+  } finally {
+    server.close();
+  }
+});

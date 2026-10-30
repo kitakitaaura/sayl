@@ -1,11 +1,34 @@
 /**
- * HTTP(S) tracker announces, sent through a relay tunnel. Workers can't use
- * UDP, so a udp:// tracker is tried over HTTP on the same host and port
- * (many big trackers, opentrackr among them, answer both). The public
- * trackers asked for every torrent are in public-trackers.js.
+ * HTTP(S) tracker announces, through the relay. Workers can't use UDP, so a
+ * udp:// tracker is tried over HTTP on the same host and port (many big
+ * trackers, opentrackr among them, answer both). The public trackers asked
+ * for every torrent are in public-trackers.js.
+ *
+ * Two ways through the relay: its /announce (a fetch() from the Worker, which
+ * reaches trackers behind Cloudflare and costs one request) and, for relays
+ * without it or trackers it can't fetch, a tunnel carrying the raw request.
+ * Trackers that fail both ways are remembered (deadTrackers) and skipped for
+ * a while.
  */
 import { decode, text } from './bencode.js';
 import { openTunnel } from './tunnel.js';
+import { countRequest } from './usage.js';
+
+/** Trackers that failed both ways: announce URL → skip until (ms). Shared by every download; save it to keep it. */
+export const deadTrackers = new Map();
+export const DEAD_FOR_MS = 6 * 3600_000;
+
+/** Relays without /announce (from before relay version 4): relay URL → true. */
+const noFetch = new Map();
+/** Trackers the relay couldn't fetch but a tunnel reached: announce URL → true. */
+const tunnelOnly = new Map();
+
+class TrackerError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.code = code; // 'tracker': it answered, but not usefully; 'unsupported': no /announce; else the way there failed
+  }
+}
 
 /** Turns tracker URLs into unique HTTP(S) announce URLs. */
 export function announceUrls(trackers) {
@@ -35,8 +58,6 @@ const encodeBytes = (bytes) => Array.from(bytes, (b) => `%${b.toString(16).padSt
  */
 export async function announce(relay, trackerUrl, opts) {
   const u = new URL(trackerUrl);
-  const tls = u.protocol === 'https:';
-  const port = Number(u.port) || (tls ? 443 : 80);
   const query = [
     `info_hash=${encodeBytes(opts.infoHash)}`,
     `peer_id=${encodeBytes(opts.peerId)}`,
@@ -50,8 +71,59 @@ export async function announce(relay, trackerUrl, opts) {
   ].filter(Boolean);
   const existing = u.search.slice(1);
   const path = `${u.pathname}?${existing ? `${existing}&` : ''}${query.join('&')}`;
-  const request = `GET ${path} HTTP/1.0\r\nHost: ${u.host}\r\nUser-Agent: Sayl-relay/0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`;
+  if (!noFetch.get(relay.url) && !tunnelOnly.get(trackerUrl) && opts.via !== 'tunnel') {
+    try {
+      return await announceByFetch(relay, `${u.origin}${path}`);
+    } catch (err) {
+      if (err.code === 'tracker') throw err; // it answered: a tunnel would get the same
+      if (err.code === 'unsupported') noFetch.set(relay.url, true);
+      // the Worker couldn't fetch it (an unusual port, say): a tunnel may still reach it
+      try {
+        const r = await announceByTunnel(relay, u, path);
+        tunnelOnly.set(trackerUrl, true);
+        return r;
+      } catch (err2) {
+        throw new Error(`${err2.message}; by fetch: ${err.message}`);
+      }
+    }
+  }
+  return announceByTunnel(relay, u, path);
+}
 
+async function announceByFetch(relay, fullUrl) {
+  const u = new URL('/announce', relay.url);
+  u.searchParams.set('url', fullUrl);
+  if (relay.token) u.searchParams.set('token', relay.token);
+  countRequest();
+  let res;
+  try {
+    res = await fetch(u, { signal: AbortSignal.timeout(20_000) });
+  } catch (err) {
+    throw new TrackerError(`relay unreachable: ${err.message}`);
+  }
+  if (res.status === 404) throw new TrackerError('the relay has no /announce', 'unsupported');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new TrackerError(body.error ?? `relay answered ${res.status}`, 'tracker');
+  }
+  const status = Number(res.headers.get('x-tracker-status'));
+  if (status === 0) {
+    // the Worker couldn't fetch it at all: a tunnel may still reach it
+    const body = await res.json().catch(() => ({}));
+    throw new TrackerError(body.error ?? 'fetch failed');
+  }
+  if (status !== 200) throw new TrackerError(`tracker answered ${status || 'garbage'}`, 'tracker');
+  try {
+    return parseBody(new Uint8Array(await res.arrayBuffer()));
+  } catch (err) {
+    throw new TrackerError(err.message, 'tracker');
+  }
+}
+
+async function announceByTunnel(relay, u, path) {
+  const tls = u.protocol === 'https:';
+  const port = Number(u.port) || (tls ? 443 : 80);
+  const request = `GET ${path} HTTP/1.0\r\nHost: ${u.host}\r\nUser-Agent: Sayl-relay/0.1\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`;
   const tunnel = await openTunnel(relay, { host: u.hostname, port, tls });
   const chunks = [];
   const body = await new Promise((resolve, reject) => {
@@ -93,6 +165,12 @@ export function parseResponse(raw) {
   if (status !== 200) throw new Error(`tracker answered ${status || 'garbage'}`);
   let body = raw.subarray(end + 4);
   if (/^transfer-encoding:\s*chunked/im.test(head)) body = unchunk(body);
+  return parseBody(body);
+}
+
+/** A tracker's bencoded answer: { peers, interval }. */
+export function parseBody(body) {
+  if (!body.length) throw new Error('tracker sent an empty answer');
   const { value } = decode(body);
   if (value['failure reason']) throw new Error(`tracker refused: ${text(value['failure reason'])}`);
   const peers = [];
